@@ -1,0 +1,51 @@
+import os
+import threading
+from flask import Flask
+from telegram import Update
+from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
+from openai import OpenAI
+
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot sedang berjalan!"
+
+client = OpenAI(
+    base_url="https://openrouter.ai/api/v1",
+    api_key=os.environ.get("OPENROUTER_API_KEY"),
+)
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text="Hai! Saya pembantu peribadi anda. Apa yang boleh saya bantu?"
+    )
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_message = update.message.text
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    try:
+        response = client.chat.completions.create(
+            model="deepseek/deepseek-r1:free",
+            messages=[
+                {"role": "system", "content": "Anda pembantu peribadi AI yang mesra. Jawab dalam Bahasa Melayu."},
+                {"role": "user", "content": user_message}
+            ],
+            stream=False
+        )
+        reply = response.choices[0].message.content
+        await context.bot.send_message(chat_id=update.effective_chat.id, text=reply)
+    except Exception as e:
+        await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Maaf, ada masalah teknikal. (Error: {e})")
+
+def run_bot():
+    application = ApplicationBuilder().token(os.environ.get("TELEGRAM_TOKEN")).build()
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
+    application.run_polling()
+
+if __name__ == '__main__':
+    threading.Thread(target=run_bot).start()
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
