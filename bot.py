@@ -1,20 +1,15 @@
 import os
 import threading
+import requests
 from flask import Flask
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
-from openai import OpenAI
 
 app = Flask(__name__)
 
 @app.route('/')
 def home():
     return "Bot sedang berjalan!"
-
-client = OpenAI(
-    base_url="https://openrouter.ai/api/v1",
-    api_key=os.environ.get("OPENROUTER_API_KEY"),
-)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_message(
@@ -25,17 +20,31 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_message = update.message.text
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    
     try:
-        response = client.chat.completions.create(
-            model="deepseek/deepseek-r1:free",
-            messages=[
-                {"role": "system", "content": "Anda pembantu peribadi AI yang mesra. Jawab dalam Bahasa Melayu."},
-                {"role": "user", "content": user_message}
-            ],
-            stream=False
+        api_key = os.environ.get("OPENROUTER_API_KEY")
+        response = requests.post(
+            url="https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": "deepseek/deepseek-r1:free",
+                "messages": [
+                    {"role": "system", "content": "Anda pembantu peribadi AI yang mesra. Jawab dalam Bahasa Melayu."},
+                    {"role": "user", "content": user_message}
+                ]
+            }
         )
-        reply = response.choices[0].message.content
+        
+        if response.status_code == 200:
+            reply = response.json()['choices'][0]['message']['content']
+        else:
+            reply = f"Maaf, ada masalah teknikal. (Error: {response.status_code})"
+            
         await context.bot.send_message(chat_id=update.effective_chat.id, text=reply)
+        
     except Exception as e:
         await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Maaf, ada masalah teknikal. (Error: {e})")
 
