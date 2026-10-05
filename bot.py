@@ -3,6 +3,7 @@ import asyncio
 import random
 import logging
 import httpx
+from pydub import AudioSegment
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
@@ -19,15 +20,22 @@ log = logging.getLogger("bot")
 SYSTEM_PROMPT = "Anda pembantu peribadi AI yang mesra. Jawab dalam Bahasa Melayu."
 FINAL_ERROR_MESSAGE = "Maaf, servis AI sedang sibuk sekarang. Cuba hantar mesej sekali lagi sebentar lagi ya."
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_WHISPER_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 TRANSIENT = {408, 429, 500, 502, 503, 504, 524, 529}
 
+
 def validate_environment():
-    required = {"TELEGRAM_TOKEN": TOKEN, "RENDER_EXTERNAL_URL": RENDER_URL,
-                "GROQ_API_KEY": GROQ_API_KEY, "OPENROUTER_API_KEY": OPENROUTER_API_KEY}
+    required = {
+        "TELEGRAM_TOKEN": TOKEN,
+        "RENDER_EXTERNAL_URL": RENDER_URL,
+        "GROQ_API_KEY": GROQ_API_KEY,
+        "OPENROUTER_API_KEY": OPENROUTER_API_KEY,
+    }
     missing = [n for n, v in required.items() if not v]
     if missing:
         raise RuntimeError("Environment variable tiada: " + ", ".join(missing))
+
 
 def get_retry_after(response):
     value = response.headers.get("retry-after")
@@ -37,6 +45,7 @@ def get_retry_after(response):
         return max(0.0, float(value.strip()))
     except (TypeError, ValueError):
         return None
+
 
 def extract_content(data):
     if not isinstance(data, dict):
@@ -55,6 +64,7 @@ def extract_content(data):
         return None
     content = content.strip()
     return content if content else None
+
 
 async def call_provider(client, url, key, payload, provider_name,
                         timeout_seconds=10.0, retry_once=True):
@@ -112,9 +122,9 @@ async def call_provider(client, url, key, payload, provider_name,
         await asyncio.sleep(delay)
     return None
 
+
 async def ask_ai(messages):
     async with httpx.AsyncClient() as client:
-        # 1. Groq GPT-OSS 120B
         reply = await call_provider(
             client=client, url=GROQ_URL, key=GROQ_API_KEY,
             payload={"model": "openai/gpt-oss-120b", "messages": messages,
@@ -122,31 +132,56 @@ async def ask_ai(messages):
                      "reasoning_effort": "low"},
             provider_name="Groq/GPT-OSS-120B", timeout_seconds=10.0, retry_once=True,
         )
-        if reply: return reply
+        if reply:
+            return reply
 
-        # 2. Groq Qwen 3.8 27B
         reply = await call_provider(
             client=client, url=GROQ_URL, key=GROQ_API_KEY,
             payload={"model": "qwen/qwen3.8-27b", "messages": messages,
                      "temperature": 0.6, "max_completion_tokens": 800},
             provider_name="Groq/Qwen3.8-27B", timeout_seconds=10.0, retry_once=True,
         )
-        if reply: return reply
+        if reply:
+            return reply
 
-        # 3 & 4. OpenRouter (native fallback)
         reply = await call_provider(
             client=client, url=OPENROUTER_URL, key=OPENROUTER_API_KEY,
-            payload={"models": ["qwen/qwen3.6-plus:free",
-                                "meta-llama/llama-3.3-70b-instruct:free"],
+            payload={"models": ["meta-llama/llama-3.3-70b-instruct:free"],
                      "messages": messages, "temperature": 0.6, "max_tokens": 800},
             provider_name="OpenRouter", timeout_seconds=20.0, retry_once=True,
         )
-        if reply: return reply
+        if reply:
+            return reply
 
     return FINAL_ERROR_MESSAGE
 
+
+async def transcribe_voice(file_path: str):
+    try:
+        async with httpx.AsyncClient() as client:
+            with open(file_path, "rb") as f:
+                files = {"file": (os.path.basename(file_path), f, "audio/wav")}
+                data = {"model": "whisper-large-v3-turbo", "language": "ms"}
+                response = await client.post(
+                    GROQ_WHISPER_URL,
+                    headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
+                    files=files,
+                    data=data,
+                    timeout=30.0,
+                )
+            if response.status_code == 200:
+                return response.json().get("text")
+            log.error("Whisper error: HTTP %s - %s", response.status_code, response.text[:200])
+    except Exception:
+        log.exception("Gagal transkripsi voice note")
+    return None
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.effective_message.reply_text("Hai! Saya pembantu peribadi anda. Apa yang boleh saya bantu?")
+    await update.effective_message.reply_text(
+        "Hai! Saya pembantu peribadi anda. Hantar mesej teks atau voice note ya."
+    )
+
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
@@ -160,18 +195,62 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         reply = await asyncio.wait_for(ask_ai(messages), timeout=55)
     except asyncio.TimeoutError:
-        log.warning("Keseluruhan AI fallback chain timeout")
         reply = "Maaf, respons mengambil masa terlalu lama. Cuba lagi sebentar ya."
     except Exception:
         log.exception("Unhandled error semasa ask_ai")
         reply = FINAL_ERROR_MESSAGE
     await msg.reply_text(reply[:4000])
 
+
+async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.effective_message
+    if not msg or not msg.voice:
+        return
+
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+
+    ogg_path = f"/tmp/{msg.voice.file_unique_id}.oga"
+    wav_path = f"/tmp/{msg.voice.file_unique_id}.wav"
+
+    try:
+        file = await context.bot.get_file(msg.voice.file_id)
+        await file.download_to_drive(ogg_path)
+
+        audio = AudioSegment.from_file(ogg_path, format="ogg")
+        audio.export(wav_path, format="wav")
+    except Exception:
+        log.exception("Gagal muat turun atau tukar format audio")
+        await msg.reply_text("Maaf, saya tidak dapat memproses fail audio ini.")
+        return
+
+    transcript = await transcribe_voice(wav_path)
+    if not transcript:
+        await msg.reply_text("Maaf, saya tidak dapat memahami voice note ini. Cuba lagi.")
+        return
+
+    log.info("Transkrip: %s", transcript[:100])
+
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": transcript},
+    ]
+    try:
+        reply = await asyncio.wait_for(ask_ai(messages), timeout=55)
+    except asyncio.TimeoutError:
+        reply = "Maaf, respons mengambil masa terlalu lama. Cuba lagi sebentar ya."
+    except Exception:
+        log.exception("Ralat semasa ask_ai (voice)")
+        reply = FINAL_ERROR_MESSAGE
+
+    await msg.reply_text(reply[:4000])
+
+
 def main():
     validate_environment()
     application = Application.builder().token(TOKEN).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    application.add_handler(MessageHandler(filters.VOICE, handle_voice))
     webhook_url = f"{RENDER_URL.rstrip('/')}/{TOKEN}"
     application.run_webhook(
         listen="0.0.0.0",
@@ -179,6 +258,7 @@ def main():
         url_path=TOKEN,
         webhook_url=webhook_url,
     )
+
 
 if __name__ == "__main__":
     main()
