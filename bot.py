@@ -25,7 +25,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "X-Title": "Bot Pembantu Peribadi"
                 },
                 json={
-                    "model": "openrouter/free",
+                    "models": [
+                        "qwen/qwen3.6-plus:free",
+                        "nvidia/nemotron-3-ultra-550b-a55b:free"
+                    ],
                     "messages": [
                         {"role": "system", "content": "Anda pembantu peribadi AI yang mesra. Jawab dalam Bahasa Melayu."},
                         {"role": "user", "content": update.message.text}
