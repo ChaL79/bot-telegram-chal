@@ -35,13 +35,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     ]
                 }
             )
-        if response.status_code == 200:
-            reply = response.json()["choices"][0]["message"]["content"]
+
+        response_data = response.json()
+
+        # --- PENGENDALIAN RALAT YANG BETUL ---
+        if "error" in response_data:
+            error_info = response_data["error"]
+            reply = f"Maaf, ada masalah teknikal. (Ralat: {error_info.get('message', 'Tidak diketahui')})"
+            logging.error(f"OpenRouter API error: {error_info}")
+        elif "choices" not in response_data or not response_data["choices"]:
+            reply = "Maaf, saya tidak menerima sebarang jawapan yang sah daripada model AI. Sila cuba lagi."
+            logging.error(f"OpenRouter API returned no choices: {response_data}")
         else:
-            reply = f"Maaf, ada masalah teknikal. (Error: {response.status_code})"
+            reply = response_data["choices"][0]["message"]["content"]
+
         await update.message.reply_text(reply)
+
     except Exception as e:
         await update.message.reply_text(f"Maaf, ada masalah teknikal. (Error: {e})")
+        logging.error(f"Exception in handle_message: {e}")
 
 def main():
     application = Application.builder().token(TOKEN).build()
