@@ -597,12 +597,17 @@ async def enrich_with_read_excerpts(
     # across all methods, avoid adding domains as explicit allowlist entries.
     general_candidate_urls = set()
     if not official_google and not identity_docs:
+        # Prefer independent hostnames: three W3C navigation pages should not
+        # crowd out an MDN or GOV.UK result already found by public search.
+        seen_hosts = {urlsplit(ref["url"]).hostname for ref in approved_candidates}
         for ref in sources:
             url = ref.get("url", "")
+            host = urlsplit(url).hostname
             if (len(approved_candidates) >= capacity or url in seen
-                    or not safe_public_article_url(url)):
+                    or host in seen_hosts or not safe_public_article_url(url)):
                 continue
             seen.add(url)
+            seen_hosts.add(host)
             approved_candidates.append(ref)
             general_candidate_urls.add(url)
 
