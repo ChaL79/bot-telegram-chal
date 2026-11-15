@@ -680,7 +680,7 @@ No content on data practices.
         self.assertEqual(len(visited), 2)
         self.assertEqual(len(sources), 2)
         self.assertTrue(all(x["read_status"] == "verified_page_excerpt" for x in sources))
-        self.assertTrue(all("thermal expansion" in x["excerpt"] for x in sources))
+        self.assertTrue(all("thermal expansion" in x["excerpt"].lower() for x in sources))
 
     async def test_sea_level_seed_blocked_stays_unverified(self):
         question = "Compare NOAA NASA IPCC sea level rise thermal expansion"
