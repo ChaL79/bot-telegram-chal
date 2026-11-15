@@ -45,6 +45,39 @@ IDENTITY_DOCS = (
 )
 IDENTITY_ALLOWED_URLS = frozenset(x[0] for x in IDENTITY_DOCS)
 
+# Stable primary-source fallbacks verified independently. Public RSS search
+# can return zero institution-domain results even when documents exist.
+# These URLs are NOT search metadata and become evidence only after a real
+# bounded HTTP fetch yields a relevant article excerpt.
+SCIENCE_SEA_LEVEL_DOCS = (
+    ("https://www.climate.gov/news-features/understanding-climate/climate-change-global-sea-level",
+     "NOAA Climate.gov: Climate Change Global Sea Level",
+     "sea level rise ocean thermal expansion land ice glaciers"),
+    ("https://sealevel.nasa.gov/faq/12/what-causes-sea-level-rise/",
+     "NASA Sea Level Change: What causes sea level rise?",
+     "sea level rise thermal expansion melting land ice"),
+)
+
+
+def official_science_seeds(question: str) -> list[dict]:
+    """Read exact approved primary sources for a recognized science subject.
+
+    This is a transparent fallback for sea-level research, NOT universal
+    web retrieval and not a claim that a document has already been fetched.
+    """
+    terms = set(search_query_terms(question))
+    requested = terms & set(OFFICIAL_SCIENCE_SITES)
+    if not requested or not {"sea", "level"}.issubset(terms):
+        return []
+    refs = []
+    for url, title, focus in SCIENCE_SEA_LEVEL_DOCS:
+        if ("noaa" in requested and "climate.gov" in url
+                or "nasa" in requested and "nasa.gov" in url):
+            refs.append({"provider": "Official science agency primary source",
+                         "title": title, "url": url, "snippet": "",
+                         "published": "", "focus": focus})
+    return refs
+
 
 def identity_official_docs(question: str) -> list[dict]:
     words = set(search_query_terms(question))
@@ -547,7 +580,9 @@ async def enrich_with_read_excerpts(
     official_google = google_official_docs(question)
     identity_docs = identity_official_docs(question)
     capacity = MAX_GOOGLE_FETCHES if len(official_google) >= 3 else MAX_FETCHES
-    for ref in recommended_official_docs(question) + official_google + identity_docs + sources:
+    science_seeds = official_science_seeds(question)
+    for ref in (recommended_official_docs(question) + official_google
+                + identity_docs + science_seeds + sources):
         url = ref.get("url", "")
         if url in seen or not is_approved_document_url(url):
             continue
@@ -558,6 +593,10 @@ async def enrich_with_read_excerpts(
 
     async def load(ref):
         focus = ref.get("focus", question)
+        if ref["url"] in {seed[0] for seed in SCIENCE_SEA_LEVEL_DOCS}:
+            # Do not let the constant generic focus conceal the specific
+            # science question (e.g. floating sea ice vs land ice).
+            focus = question
         if ref["url"] == IDENTITY_DOCS[0][0]:
             # Technical NIST section extraction must see the user's actual
             # binding/AAL3 question, not the static generic search focus.
