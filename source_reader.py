@@ -209,7 +209,7 @@ def _targeted_pricing_excerpt(text: str, question: str) -> str:
                 break
         section = "\n".join(lines[start:end])
         # Require the actual model identifier and a pricing row nearby.
-        if (model in section.casefold()
+        if (heading.match(lines[start])
                 and re.search(r"input price|output price|free tier", section, flags=re.I)):
             found.append(section)
     if not found:
