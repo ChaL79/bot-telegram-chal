@@ -35,6 +35,9 @@ QUERY_FILLER = frozenset({
     "search", "check", "please", "find", "source", "sources", "about",
     "the", "a", "an", "of", "for", "with", "and", "or", "summarize", "compare",
     "deep", "dive", "research", "explain", "how", "what",
+    "verify", "verified", "verification", "official", "whether", "from",
+    "identify", "include", "documented", "documentation", "assumptions",
+    "assumption", "actual", "read", "reading", "pages", "page", "provide",
 })
 
 
@@ -150,6 +153,12 @@ def source_relevance(item: dict, query_terms: list[str]) -> int:
     )}
     sought = [_canonical(x) for x in query_terms]
     matched = set(sought) & (title_terms | content_terms)
+    # Named libraries/products are hard anchors: generic instructions such as
+    # "verify" or "official" must never admit unrelated search results.
+    hard_anchors = {"aiolimiter", "asyncio", "semaphore"}
+    required = set(sought) & hard_anchors
+    if required and not (required & matched):
+        return 0
     minimum = 2 if len(set(sought)) >= 3 else len(set(sought))
     if len(matched) < minimum:
         return 0
