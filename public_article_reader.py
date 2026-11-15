@@ -16,7 +16,7 @@ import httpcore
 import httpx
 from httpcore._backends.anyio import AnyIOBackend
 
-BLOCKED_SUFFIXES = (".local", ".localhost", ".internal", ".home", ".lan", ".test", ".invalid", ".onion")
+BLOCKED_SUFFIXES = (".local", ".localhost", ".localdomain", ".internal", ".home", ".lan", ".test", ".invalid", ".onion")
 BLOCKED_PATHS = ("/admin", "/login", "/signin", "/account", "/oauth",
                  "/api/", "/wp-json", "/.git", "/.env", "/config",
                  "/download", "/logout", "/delete", "/graphql")
