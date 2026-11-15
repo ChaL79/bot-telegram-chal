@@ -79,6 +79,24 @@ class PublicReaderSecurityTests(unittest.IsolatedAsyncioTestCase):
                 await PublicIPBackend().connect_tcp("www.w3.org", 443)
         self.assertEqual(calls, [("93.184.215.14", 443)])
 
+    async def test_public_ipv6_and_tls_failure_handled_safely(self):
+        import ssl
+        import socket
+        async def ipv6_only(host, port, **kwargs):
+            return [(socket.AF_INET6, socket.SOCK_STREAM, 6, "",
+                     ("2606:4700:4700::1111", port, 0, 0))]
+        with patch("asyncio.BaseEventLoop.getaddrinfo", new=ipv6_only):
+            self.assertEqual(await resolve_public_ip("example.org"),
+                             "2606:4700:4700::1111")
+        url = "https://www.w3.org/TR/WCAG22/"
+        calls = []
+        def tls_failure(req):
+            calls.append(str(req.url))
+            raise httpx.ConnectError("certificate verify failed", request=req)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(tls_failure)) as cli:
+            self.assertEqual(await read_public_html(url, client=cli), "")
+        self.assertEqual(calls, [url])
+
     async def test_no_redirect_no_binary_no_excessive_content(self):
         url = "https://www.w3.org/TR/WCAG22/"
         for response in [
