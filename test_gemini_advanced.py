@@ -27,7 +27,7 @@ class AdvancedTests(unittest.IsolatedAsyncioTestCase):
                                                 client=client, search_client=search_client)
         self.assertTrue(ok)
         self.assertIn("https://docs.python.org/3/", answer)
-        self.assertIn("bukan bacaan penuh", answer)
+        self.assertIn("Tidak semestinya membaca artikel penuh", answer)
         self.assertIn("docs.python.org", seen[0][1]["contents"][-1]["parts"][0]["text"])
         self.assertNotIn("tools", seen[0][1])
         self.assertIn(RESEARCH_MODEL, seen[0][0])

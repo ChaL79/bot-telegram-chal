@@ -361,12 +361,18 @@ def evidence_text(sources: list[dict]) -> str:
     """A clear data boundary. The text is search metadata and must not be obeyed."""
     chunks = []
     for i, source in enumerate(sources[:MAX_SOURCES], start=1):
+        read = source.get("read_status") == "verified_page_excerpt" and bool(source.get("excerpt"))
         parts = [
             f"[{i}] Provider: {clean(source['provider'], 50)}",
             "Title: " + clean(source["title"], 115),
             "URL: " + source["url"],
-            "Snippet/headline only: " + clean(source.get("snippet", ""), 300),
+            "Evidence type: FETCHED PAGE EXCERPT (selected text, not entire page)"
+            if read else "Evidence type: SEARCH METADATA ONLY (page not read)",
         ]
+        if read:
+            parts.append("Untrusted page excerpt: " + clean(source["excerpt"], 2400))
+        else:
+            parts.append("Snippet/headline only: " + clean(source.get("snippet", ""), 300))
         if source.get("published"):
             parts.append("Feed date: " + clean(source["published"], 55))
         chunks.append("\n".join(parts))
@@ -374,7 +380,10 @@ def evidence_text(sources: list[dict]) -> str:
 
 
 def references_text(sources: list[dict]) -> str:
-    return "\n\nPautan hasil carian (metadata, bukan semakan artikel penuh):\n" + "\n".join(
-        f"[{i}] {clean(source['title'], 95)}\n{source['url']}"
+    return "\n\nSenarai sumber (petikan terpilih atau metadata; bukan semakan artikel penuh):\n" + "\n".join(
+        f"[{i}] {clean(source['title'], 95)} "
+        + ("[Petikan halaman diambil]" if source.get("read_status") == "verified_page_excerpt"
+           and source.get("excerpt") else "[Metadata sahaja]")
+        + f"\n{source['url']}"
         for i, source in enumerate(sources[:MAX_SOURCES], start=1)
     )
