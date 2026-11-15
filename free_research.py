@@ -258,6 +258,18 @@ def source_relevance(item: dict, query_terms: list[str]) -> int:
         # A NOAA article naturally says NOAA in its title, but a NASA article
         # should not be forced to include NOAA/IPCC as well.
         return len(matched) + 2 * len(matched & title_terms) + 6
+    # Multi-institution accessibility questions should accept an article from
+    # EACH named source: the MDN article need not literally say W3C and GOV.UK.
+    accessibility_orgs = set(sought) & set(ACCESSIBILITY_SOURCE_HOSTS)
+    if len(accessibility_orgs) >= 2:
+        matching_hosts = {
+            ACCESSIBILITY_SOURCE_HOSTS[org] for org in accessibility_orgs
+        }
+        topical = set(sought) & ACCESSIBILITY_TOPIC_WORDS
+        found = title_terms | content_terms
+        if url.hostname not in matching_hosts or len(found & topical) < min(2, len(topical)):
+            return 0
+        return len(matched) + 2 * len(matched & title_terms) + 6
     minimum = 2 if len(set(sought)) >= 3 else len(set(sought))
     if len(matched) < minimum:
         return 0
