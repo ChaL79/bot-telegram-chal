@@ -367,75 +367,115 @@ Not available
 
     def test_privacy_terms_extracts_only_actual_unpaid_and_paid_statements(self):
         from source_reader import _privacy_terms_excerpt
-        doc = """Gemini API Additional Terms of Service
-Age Requirements
-Use Restrictions
-Unpaid Services
-Any Services offered free of charge are Unpaid Services.
-How Google Uses Your Data
-When you use Unpaid Services, including Google AI Studio and unpaid Gemini API quota, Google uses content you submit and generated responses to provide, improve, and develop Google products and machine learning technologies.
-To help with quality, human reviewers may read, annotate, and process API input and output. Do not submit sensitive, confidential, or personal information.
-Paid Services
-Access through an active Cloud Billing account is a Paid Service.
-How Google Uses Your Data
-When you use Paid Services, Google doesn't use your prompts or responses to improve our products.
-For Paid Services Google logs prompts for a limited time for abuse prevention.
+        doc = """# Gemini API Additional Terms of Service
+## Age Requirements
+Other general policy text.
+
+## Unpaid Services {% id="unpaid-services" %}
+
+Any Services that are offered free of charge are unpaid.
+
+### How Google Uses Your Data {% id="data-use-unpaid" %}
+
+When you use Unpaid Services, including unpaid quota on Gemini API, Google uses
+the content you submit and any generated responses to provide, improve, and
+develop Google products and services.
+
+To help with quality and improve our products, human reviewers may read,
+annotate, and process your API input and output. Do not submit sensitive,
+confidential, or personal information to the Unpaid Services.
+
+## Paid Services {% id="paid-services" %}
+
+For Paid Services, Google uses a different billing arrangement.
+
+### How Google Uses Your Data {% id="data-use-paid" %}
+
+When you use Paid Services, Google doesn't use your prompts, files, or responses
+to improve our products, and will process your prompts in accordance with the
+relevant data processing terms.
+
+For Paid Services, Google logs prompts for a limited period.
+
+## Payment Terms
+Don't copy this extra section.
 """
         excerpt = _privacy_terms_excerpt(doc)
         self.assertIn("Unpaid Services", excerpt)
-        self.assertIn("Google uses content you submit", excerpt)
-        self.assertIn("human reviewers", excerpt)
+        self.assertIn("Google uses the content you submit", excerpt)
+        self.assertIn("human reviewers may read", excerpt)
         self.assertIn("Paid Services", excerpt)
         self.assertIn("Google doesn't use your prompts", excerpt)
+        self.assertIn("files, or responses", excerpt)
         self.assertNotIn("Age Requirements", excerpt)
+        self.assertNotIn("Payment Terms", excerpt)
         self.assertEqual(_privacy_terms_excerpt("Unpaid Services\nPaid Services\nNo actual data-use statements"), "")
 
     async def test_privacy_terms_evidence_is_real_or_absent(self):
         from source_reader import GOOGLE_DOCS
         requested = []
-        doc = (b"<html><main><h1>Gemini API Additional Terms of Service</h1>"
-               b"<h2>Unpaid Services</h2><h3>How Google Uses Your Data</h3>"
-               b"<p>When you use Unpaid Services Google uses prompts and generated responses to improve its products.</p>"
-               b"<p>Human reviewers may read, annotate, and process API input and output. Do not submit sensitive information.</p>"
-               b"<h2>Paid Services</h2><h3>How Google Uses Your Data</h3>"
-               b"<p>When you use Paid Services Google doesn't use your prompts or responses to improve our products.</p>"
-               b"</main></html>")
+        doc = b"""# Gemini API Additional Terms of Service
+
+## Unpaid Services {% id="unpaid-services" %}
+
+When you use Unpaid Services, including the Gemini API,
+Google uses this data to improve products and services.
+
+Human reviewers may read and process your API input and output.
+
+## Paid Services {% id="paid-services" %}
+
+When you use Paid Services, Google doesn't use your prompts
+or responses to improve our products.
+"""
         def mock(req):
             requested.append(str(req.url))
             if str(req.url) == GOOGLE_DOCS["api_terms"][0]:
-                return httpx.Response(200, headers={"content-type":"text/html"}, content=doc)
+                return httpx.Response(200, headers={"content-type":"text/markdown"}, content=doc)
             return httpx.Response(403)
         async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as client:
-            sources = await enrich_with_read_excerpts("Gemini API Free Tier privacy and paid tier data use",[],client=client)
+            sources = await enrich_with_read_excerpts(
+                "Gemini API Free Tier privacy and paid tier data use", [], client=client)
         self.assertIn(GOOGLE_DOCS["api_terms"][0], requested)
         self.assertEqual(len(sources), 1)
         self.assertEqual(sources[0]["read_status"], "verified_page_excerpt")
         self.assertIn("Unpaid Services", sources[0]["excerpt"])
-        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda req: httpx.Response(403))) as client:
-            none = await enrich_with_read_excerpts("Gemini API Free Tier privacy",[],client=client)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(
+            lambda req: httpx.Response(403)
+        )) as client:
+            none = await enrich_with_read_excerpts("Gemini API Free Tier privacy", [], client=client)
         self.assertEqual(none, [])
 
     def test_privacy_terms_accepts_canonical_markdown_headings(self):
         from source_reader import _privacy_terms_excerpt
         text = """# Gemini API Additional Terms of Service
+
 ## Unpaid Services   link
-Any Services that are offered free of charge like direct interactions with Google AI Studio are Unpaid Services.
+
+Any Services that are offered free of charge are unpaid.
+
 ### How Google Uses Your Data   link
-When you use Unpaid Services, including unpaid quota on Gemini API, Google uses the content you submit and generated responses to improve products.
-To help with quality, human reviewers may read, annotate, and process your API input and output.
-Do not submit sensitive, confidential, or personal information to the Unpaid Services.
+
+When you use Unpaid Services, including unpaid quota on Gemini API,
+Google uses the content you submit and generated responses to improve products.
+
+To help with quality, human reviewers may read,
+annotate, and process your API input and output.
+
 ## Paid Services   link
+
 ### How Google Uses Your Data   link
-When you use Paid Services, Google doesn't use your prompts or responses to improve our products.
-For Paid Services Google logs prompts and responses for a limited period.
+
+When you use Paid Services, Google doesn't use your prompts
+or responses to improve our products.
+
 ## Payment Terms
 """
         excerpt = _privacy_terms_excerpt(text)
         self.assertIn("When you use Unpaid Services", excerpt)
-        self.assertIn("human reviewers may", excerpt)
+        self.assertIn("human reviewers may read", excerpt)
         self.assertIn("doesn't use your prompts", excerpt)
         self.assertNotIn("Payment Terms", excerpt)
-        self.assertNotIn("Age Requirements", excerpt)
 
     def test_privacy_terms_requires_real_unpaid_and_paid_evidence(self):
         from source_reader import _privacy_terms_excerpt
@@ -449,12 +489,12 @@ No content on data practices.
     def test_canonical_gemini_terms_allowlisted_no_arbitrary_google_docs(self):
         from source_reader import GOOGLE_DOCS, google_official_docs
         policy = GOOGLE_DOCS["api_terms"][0]
-        self.assertEqual(policy, "https://aistudio.google.com/docs/terms")
+        self.assertEqual(policy, "https://aistudio.google.com/docs/terms.md")
         self.assertTrue(is_approved_document_url(policy))
         self.assertFalse(is_approved_document_url(
             "https://ai.google.dev/gemini-api/terms"))
         self.assertFalse(is_approved_document_url(
-            "https://aistudio.google.com/docs/terms?redirect=evil"))
+            "https://aistudio.google.com/docs/terms.md?redirect=evil"))
         self.assertFalse(is_approved_document_url(
             "https://aistudio.google.com/docs/internal"))
         refs = google_official_docs(
