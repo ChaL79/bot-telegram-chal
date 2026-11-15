@@ -501,6 +501,41 @@ No content on data practices.
             "Compare Gemini API privacy, human reviewers, Unpaid Services and Paid Services")
         self.assertEqual(refs[0]["url"], policy)
 
+    def test_identity_research_selects_three_official_sources_without_general_crawl(self):
+        from source_reader import IDENTITY_DOCS, identity_official_docs
+        q = ("Conduct independent multi-source research comparing FIDO2 passkeys, "
+             "TOTP authenticator and SMS OTP with NIST CISA FIDO Alliance")
+        refs = identity_official_docs(q)
+        self.assertEqual(len(refs), 3)
+        self.assertEqual({r["url"] for r in refs}, {x[0] for x in IDENTITY_DOCS})
+        for url, title, focus in IDENTITY_DOCS:
+            self.assertTrue(is_approved_document_url(url))
+            self.assertFalse(is_approved_document_url(url + "?secret=1"))
+        self.assertFalse(is_approved_document_url("https://www.cisa.gov/private"))
+        self.assertFalse(is_approved_document_url("https://pages.nist.gov/secret"))
+        self.assertFalse(is_approved_document_url("https://fidoalliance.org/admin"))
+        self.assertEqual(identity_official_docs("Compare different AI models"), [])
+
+    async def test_security_research_has_two_real_official_excerpts_when_third_is_blocked(self):
+        from source_reader import IDENTITY_DOCS
+        requests = []
+        def mock(req):
+            requests.append(str(req.url))
+            if str(req.url) == IDENTITY_DOCS[2][0]:
+                return httpx.Response(403)
+            return httpx.Response(200, headers={"content-type":"text/html"},
+                content=(b"<html><main><h1>FIDO2 passkeys phishing resistant TOTP OTP</h1>"
+                         b"<p>NIST and FIDO Alliance describe public key authenticators and "
+                         b"phishing resistant authentication compared with SMS and TOTP.</p>"
+                         b"</main></html>"))
+        async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as client:
+            sources = await enrich_with_read_excerpts(
+                "Compare FIDO2 passkeys TOTP SMS phishing from NIST CISA FIDO", [], client=client)
+        self.assertEqual(len(requests), 3)
+        self.assertEqual(len(sources), 2)
+        self.assertTrue(all(x["read_status"] == "verified_page_excerpt" for x in sources))
+        self.assertTrue(all("phishing" in x["excerpt"].lower() for x in sources))
+
     def test_official_doc_selection_and_no_fabricated_page(self):
         self.assertEqual(recommended_official_docs("Python asyncio.Semaphore")[0]["url"], OFFICIAL_SEMAPHORE)
         self.assertEqual(recommended_official_docs("Weather tomorrow"), [])
