@@ -94,6 +94,16 @@ class SourceReaderTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("[Metadata sahaja]", references_text(sources))
         self.assertLessEqual(len(requests), 3)
 
+    def test_explicit_aiolimiter_always_selects_its_docs(self):
+        from source_reader import AIOLIMITER_DOCS
+        refs = recommended_official_docs("Python asyncio.Semaphore and aiolimiter")
+        self.assertEqual(refs[0]["url"], OFFICIAL_SEMAPHORE)
+        self.assertIn(AIOLIMITER_DOCS, [item["url"] for item in refs])
+        refs2 = recommended_official_docs("Python asyncio.Semaphore and aiolimiter's Leaky Bucket algorithm")
+        self.assertIn(AIOLIMITER_DOCS, [item["url"] for item in refs2])
+        refs3 = recommended_official_docs("Python asyncio rate limiting")
+        self.assertIn(AIOLIMITER_DOCS, [item["url"] for item in refs3])
+
     def test_official_doc_selection_and_no_fabricated_page(self):
         self.assertEqual(recommended_official_docs("Python asyncio.Semaphore")[0]["url"], OFFICIAL_SEMAPHORE)
         self.assertEqual(recommended_official_docs("Weather tomorrow"), [])
