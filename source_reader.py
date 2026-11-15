@@ -210,10 +210,10 @@ class MainText(HTMLParser):
         if self.main_depth is not None and self.ignore_depth is None:
             self.fragments.append(data)
 
-    def content(self) -> str:
+    def content(self, *, max_line_chars: int = 650) -> str:
         return "\n".join(
-            clean(row, 650) for row in "".join(self.fragments).splitlines()
-            if clean(row, 650)
+            clean(row, max_line_chars) for row in "".join(self.fragments).splitlines()
+            if clean(row, max_line_chars)
         )
 
 
@@ -317,6 +317,51 @@ def _privacy_terms_excerpt(text: str) -> str:
     return result[:MAX_EXCERPT]
 
 
+def _nist_binding_excerpt(text: str, question: str) -> str:
+    """Pick source-backed NIST definitions for binding, WebAuthn, and AAL3.
+
+    The authenticators page is long. A global six-line keyword ranking misses
+    the related but distant key-exportability paragraph. Only text actually
+    extracted from the exact official NIST page can appear here.
+    """
+    q = question.casefold()
+    if not any(phrase in q for phrase in (
+        "verifier name binding", "channel binding", "aal3", "aal 3",
+        "syncable", "synced passkeys", "synchronized passkeys",
+    )):
+        return ""
+    lines = [x.strip() for x in text.splitlines() if x.strip()]
+    def locate(*needles: str) -> str:
+        return next((line for line in lines if all(
+            needle in line.casefold() for needle in needles)), "")
+
+    # Match complete concepts, not isolated words from navigation headings.
+    channel = locate("an authentication protocol with channel binding",
+                     "channel identifier")
+    verifier = locate("an authentication protocol with verifier name binding",
+                      "verifier identifier")
+    webauthn = locate("webauthn", "fido2", "verifier name binding")
+    export = locate("non-exportable cryptographic keys are required at aal3",
+                    "syncable authenticators")
+
+    passages = []
+    if channel:
+        passages.append("Channel Binding\n" + channel[:475])
+    if verifier:
+        passages.append("Verifier Name Binding\n" + verifier[:490])
+    if webauthn:
+        passages.append("WebAuthn/FIDO2\n" + webauthn[:450])
+    if export:
+        # Keep the actual standard's AAL3/syncability conclusion together;
+        # it occurs near the end of a long paragraph after 650 characters.
+        start = export.casefold().find("non-exportable authentication keys are considered")
+        if start < 0:
+            start = max(0, export.casefold().find(
+                "non-exportable cryptographic keys are required at aal3") - 60)
+        passages.append("AAL3 Key Exportability\n" + export[start:start + 425])
+    return "\n\n".join(passages)[:MAX_EXCERPT]
+
+
 def select_relevant_excerpt(text: str, query: str) -> str:
     """Prefer exact named pricing sections, then generic topical excerpts."""
     targeted = _targeted_pricing_excerpt(text, query)
@@ -398,7 +443,9 @@ async def fetch_page_excerpt(
                         nist_article_container=(current == IDENTITY_DOCS[0][0])
                     )
                     parser.feed(raw)
-                    page_text = parser.content()
+                    page_text = parser.content(
+                        max_line_chars=(1250 if current == IDENTITY_DOCS[0][0] else 650)
+                    )
                 else:
                     # Reject generic anti-bot/error messages and content without
                     # a specific AI Studio/Gemini API subject mention.
@@ -414,6 +461,9 @@ async def fetch_page_excerpt(
                     )
                 if current == GOOGLE_DOCS["api_terms"][0]:
                     excerpt = _privacy_terms_excerpt(page_text)
+                elif current == IDENTITY_DOCS[0][0]:
+                    excerpt = (_nist_binding_excerpt(page_text, question)
+                               or select_relevant_excerpt(page_text, question))
                 else:
                     excerpt = select_relevant_excerpt(page_text, question)
                 if not excerpt:
