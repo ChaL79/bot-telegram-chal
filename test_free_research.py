@@ -200,6 +200,67 @@ class FreeResearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("cari.com", evidence_text(sources))
         self.assertIn("q=python%20asyncio%20rate%20limiting", received[0].lower())
 
+    def test_science_query_requires_real_topic_and_verified_host(self):
+        q = ("Compare NOAA NASA IPCC scientific explanations of global sea-level rise, "
+             "thermal expansion of oceans and melting land ice.")
+        terms = search_query_terms(q)
+        self.assertTrue({"noaa", "nasa", "ipcc"}.issubset(set(terms)))
+        self.assertTrue({"sea", "level"}.issubset(set(terms)))
+        samples = [
+            ("Latest Satellite Imagery", "https://www.nhc.noaa.gov/satellite.php",
+             "hurricane imagery current storm"),
+            ("20th century in science", "https://en.wikipedia.org/wiki/20th_century_in_science",
+             "IPCC global climate century"),
+            ("Scientific Consensus", "https://science.nasa.gov/climate-change/scientific-consensus/",
+             "NASA scientific climate consensus"),
+        ]
+        for title, url, snippet in samples:
+            self.assertEqual(source_relevance(
+                {"title":title, "url":url, "snippet":snippet}, terms), 0)
+        relevant = {"title":"Climate Change: Global Sea Level",
+                    "url":"https://www.climate.gov/news-features/understanding-climate/climate-change-global-sea-level",
+                    "snippet":"NOAA ocean thermal expansion and glacier melting drive sea level rise"}
+        self.assertGreater(source_relevance(relevant, terms), 0)
+
+    async def test_institution_site_search_returns_organization_diverse_metadata(self):
+        queries = []
+        def mock(req):
+            host = req.url.host
+            if host == "www.bing.com":
+                q = req.url.params.get("q", "")
+                queries.append(q)
+                if q.startswith("site:www.climate.gov"):
+                    url = "https://www.climate.gov/news-features/understanding-climate/climate-change-global-sea-level"
+                    title = "NOAA Global Sea Level Thermal Expansion"
+                elif q.startswith("site:sealevel.nasa.gov"):
+                    url = "https://sealevel.nasa.gov/faq/12/what-causes-sea-level-rise/"
+                    title = "NASA Sea Level Rise Thermal Expansion"
+                elif q.startswith("site:www.ipcc.ch"):
+                    url = "https://www.ipcc.ch/report/ar6/wg1/chapter/summary-for-policymakers/"
+                    title = "IPCC Sea Level Rise Ocean Thermal Expansion"
+                else:
+                    return httpx.Response(200, content=b"<rss><channel></channel></rss>")
+                xml = ("<rss><channel><item><title>" + title + "</title><link>" + url
+                       + "</link><description>sea level rise ocean thermal expansion "
+                       + "land ice melting</description></item></channel></rss>")
+                return httpx.Response(200, content=xml.encode())
+            if host == "en.wikipedia.org":
+                return httpx.Response(200, json={"query":{"search":[]}})
+            if host == "news.google.com":
+                return httpx.Response(200, content=b"<rss><channel></channel></rss>")
+            return httpx.Response(403)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as client:
+            sources = await public_source_search(
+                "Compare NOAA NASA IPCC global sea level rise thermal expansion land ice melting",
+                client=client)
+        self.assertEqual(len(queries), 4)
+        self.assertEqual(len(sources), 3)
+        self.assertTrue(all(item["provider"] == "Official site discovery via Bing RSS" for item in sources))
+        self.assertIn("climate.gov", sources[0]["url"])
+        self.assertIn("nasa.gov", sources[1]["url"])
+        self.assertIn("ipcc.ch", sources[2]["url"])
+        self.assertTrue(all(item.get("read_status") is None for item in sources))
+
     async def test_provider_failure_fails_closed(self):
         async with httpx.AsyncClient(transport=httpx.MockTransport(
             lambda req: httpx.Response(403)
