@@ -120,6 +120,57 @@ class FreeResearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(search_query_terms(query), ["python", "asyncio", "rate", "limiting"])
         self.assertEqual(search_query_terms("/deepdive Cari Python asyncio rate limiting"), ["python", "asyncio", "rate", "limiting"])
 
+    def test_wifi_research_keeps_topic_not_malay_instructions(self):
+        question = ("/deepdive Deep research: Bandingkan Wi-Fi 7 dengan Wi-Fi 6 berdasarkan "
+                    "sumber rasmi Wi-Fi Alliance, Intel dan TP-Link. Semak perbezaan kelajuan, "
+                    "latency, jalur 6 GHz, Multi-Link Operation (MLO), dan manfaat sebenar "
+                    "untuk internet rumah 500 Mbps. Cuba baca kandungan HTML sebenar daripada "
+                    "sekurang-kurangnya dua domain berbeza. Sertakan URL, petikan sebenar "
+                    "setiap halaman yang berjaya dibaca, dan asingkan sumber metadata sahaja "
+                    "atau gagal diakses. Jangan reka fakta, petikan atau keputusan ujian.")
+        terms = search_query_terms(question)
+        self.assertEqual(terms[:6], ["wifi7", "wifi", "wifi6", "mlo", "6ghz", "latency"])
+        self.assertNotIn("bandingkan", terms)
+        self.assertNotIn("berdasarkan", terms)
+        self.assertNotIn("sekurang", terms)
+        self.assertNotIn("petikan", terms)
+
+    def test_wifi_version_matching_accepts_real_articles_not_generic_wifi(self):
+        terms = search_query_terms("Wi-Fi 7 vs Wi-Fi 6 MLO 6 GHz")
+        for item in [
+            {"title": "Wi-Fi 7 multi-link operation MLO explained",
+             "url": "https://example.org/guides/wifi-7-mlo/",
+             "snippet": "Wi-Fi 7 technology and 6 GHz"},
+            {"title": "Wi-Fi 6 compared to Wi-Fi 7",
+             "url": "https://example.org/articles/wifi6-vs-wifi7",
+             "snippet": "Wireless networking standards"},
+        ]:
+            self.assertGreater(source_relevance(item, terms), 0)
+        generic = {"title": "Public Wi-Fi hotspots", "url": "https://example.org/hotspots",
+                   "snippet": "Free internet services"}
+        self.assertEqual(source_relevance(generic, terms), 0)
+
+    async def test_wifi_search_accepts_source_results_after_normalization(self):
+        question = "Bandingkan Wi-Fi 7 dengan Wi-Fi 6, latency dan Multi-Link Operation."
+        received = []
+        def mock(req):
+            if req.url.host == "www.bing.com":
+                received.append(str(req.url.params.get("q")))
+                return httpx.Response(200, content=b"""<rss><channel>
+                    <item><title>Wi-Fi 7 multi-link operation MLO</title>
+                    <link>https://example.org/wifi7-mlo</link>
+                    <description>Compare Wi-Fi 7 and Wi-Fi 6 and latency improvements</description></item>
+                    <item><title>Unrelated shopping news</title>
+                    <link>https://example.org/shopping</link>
+                    <description>Nothing about networking</description></item>
+                </channel></rss>""")
+            return httpx.Response(403)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as client:
+            result = await public_source_search(question, client=client)
+        self.assertEqual(len(result), 1)
+        self.assertIn("Wi-Fi 7", result[0]["title"])
+        self.assertIn("wifi7", received[0])
+
     def test_long_multisource_question_finds_security_subject_not_conduct(self):
         q = ("Conduct independent, multi-source cybersecurity research as of 15 November 2026. "
              "Compare three account authentication methods: FIDO2 passkeys, authenticator-app "
