@@ -534,6 +534,60 @@ No content on data practices.
             self.assertEqual(await fetch_page_excerpt(
                 rejected, "NIST phishing resistance", client=cli), "")
 
+    def test_targeted_nist_binding_and_aal3_from_realistic_paragraphs(self):
+        from source_reader import _nist_binding_excerpt, MAX_EXCERPT
+        channel = ("An authentication protocol with channel binding SHALL establish "
+                   "an authenticated protected channel with the verifier. The protocol "
+                   "SHALL then strongly and irreversibly bind a channel identifier "
+                   "negotiated in establishing the channel to the authenticator output.")
+        verifier = ("An authentication protocol with verifier name binding SHALL "
+                    "establish an authenticated protected channel with the verifier. "
+                    "The protocol SHALL then generate an authenticator output that is "
+                    "cryptographically bound to a verifier identifier that is authenticated.")
+        webauthn = ("WebAuthn, which is used by authenticators that implement the FIDO2 "
+                    "specifications, provides phishing resistance through verifier name "
+                    "binding by choosing an authenticator secret based on the domain.")
+        export = ("Exportability is the ability of an authenticator to replicate, share, "
+                  "or store its authentication keys outside of a protected boundary. "
+                  + "Generally, authentication keys are considered exportable unless "
+                  + "the authenticator stores them in protected hardware. " * 5
+                  + "Non-exportable authentication keys are considered more secure, "
+                  + "and accordingly, non-exportable cryptographic keys are required "
+                  + "at AAL3. The authentication keys on syncable authenticators are "
+                  + "inherently exportable.")
+        content = "\n".join((channel, verifier, webauthn, export))
+        question = ("Compare verifier name binding and channel binding in FIDO2 "
+                    "WebAuthn; can synchronized passkeys satisfy NIST AAL3?")
+        excerpt = _nist_binding_excerpt(content, question)
+        self.assertIn("channel identifier", excerpt)
+        self.assertIn("verifier identifier", excerpt)
+        self.assertIn("WebAuthn", excerpt)
+        self.assertIn("FIDO2", excerpt)
+        self.assertIn("non-exportable cryptographic keys are required at AAL3", excerpt)
+        self.assertIn("syncable authenticators are inherently exportable", excerpt)
+        self.assertLessEqual(len(excerpt), MAX_EXCERPT)
+        self.assertEqual(_nist_binding_excerpt(content, "Unrelated weather question"), "")
+
+    async def test_nist_extractor_preserves_long_html_paragraph_evidence(self):
+        from source_reader import IDENTITY_DOCS
+        url = IDENTITY_DOCS[0][0]
+        export = (
+            "Exportability is the ability of an authenticator to replicate its keys. "
+            + "Keys can be considered exportable if copied to another system. " * 9
+            + "Non-exportable authentication keys are considered more secure, "
+            + "and accordingly, non-exportable cryptographic keys are required at AAL3. "
+            + "The authentication keys on syncable authenticators are inherently exportable."
+        )
+        html = ("<html><div class='container'><h1>NIST Authenticator Requirements</h1>"
+                "<p>" + export + "</p></div></html>").encode("utf-8")
+        async with httpx.AsyncClient(transport=httpx.MockTransport(
+            lambda req: httpx.Response(200, headers={"content-type":"text/html"}, content=html)
+        )) as client:
+            excerpt = await fetch_page_excerpt(
+                url, "Can synced passkeys meet AAL3 if keys are exportable?", client=client)
+        self.assertIn("non-exportable cryptographic keys are required at AAL3", excerpt)
+        self.assertIn("syncable authenticators are inherently exportable", excerpt)
+
     def test_identity_research_selects_three_official_sources_without_general_crawl(self):
         from source_reader import IDENTITY_DOCS, identity_official_docs
         q = ("Conduct independent multi-source research comparing FIDO2 passkeys, "
