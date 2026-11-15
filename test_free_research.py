@@ -120,6 +120,20 @@ class FreeResearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(search_query_terms(query), ["python", "asyncio", "rate", "limiting"])
         self.assertEqual(search_query_terms("/deepdive Cari Python asyncio rate limiting"), ["python", "asyncio", "rate", "limiting"])
 
+    def test_gemini_api_privacy_excludes_generic_google_and_launch_news(self):
+        terms = search_query_terms(
+            "Research Google Gemini API Free Tier privacy data use and training")
+        for irrelevant in [
+            {"title":"Google Maps - Wikipedia","url":"https://en.wikipedia.org/wiki/Google_Maps","snippet":"Maps navigation"},
+            {"title":"Introducing Gemini 4 Hydrogen","url":"https://news.example/gemini-model","snippet":"New model launch"},
+            {"title":"Google Drive","url":"https://en.wikipedia.org/wiki/Google_Drive","snippet":"Storage"}
+        ]:
+            self.assertEqual(source_relevance(irrelevant, terms), 0)
+        policy = {"title":"Gemini API Additional Terms of Service - Unpaid Services",
+                  "url":"https://ai.google.dev/gemini-api/terms",
+                  "snippet":"Gemini API privacy, how Google uses data on unpaid and paid services"}
+        self.assertGreater(source_relevance(policy, terms), 0)
+
     def test_aiolimiter_query_rejects_everify_and_va(self):
         terms = search_query_terms(
             "Verify from official aiolimiter documentation whether AsyncLimiter allows burst requests.")
