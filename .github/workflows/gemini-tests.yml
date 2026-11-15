@@ -32,4 +32,4 @@ jobs:
       - name: Python syntax check
         run: python -m py_compile bot.py gemini_extension.py gemini_memory.py gemini_advanced.py free_research.py source_reader.py test_gemini_extension.py test_gemini_memory.py test_gemini_advanced.py test_free_research.py test_source_reader.py
       - name: Run Gemini, memory and research regression tests
-        run: python -m unittest -v test_gemini_extension.py test_gemini_memory.py test_gemini_advanced.py test_free_research.py
+        run: python -m unittest -v test_gemini_extension.py test_gemini_memory.py test_gemini_advanced.py test_free_research.py test_source_reader.py
