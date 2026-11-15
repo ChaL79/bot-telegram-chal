@@ -43,7 +43,7 @@ class PublicReaderSecurityTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(safe_public_article_url(url), url)
 
     async def test_dns_fail_closed_when_private_or_mixed(self):
-        async def mocked_getaddrinfo(host, port, **kwargs):
+        async def mocked_getaddrinfo(self_loop, host, port, **kwargs):
             return [
                 (2, 1, 6, "", ("93.184.215.14", port)),
                 (2, 1, 6, "", ("127.0.0.1", port)),
@@ -51,7 +51,7 @@ class PublicReaderSecurityTests(unittest.IsolatedAsyncioTestCase):
         with patch("asyncio.BaseEventLoop.getaddrinfo", new=mocked_getaddrinfo):
             with self.assertRaises(OSError):
                 await resolve_public_ip("example.org")
-        async def only_public(host, port, **kwargs):
+        async def only_public(self_loop, host, port, **kwargs):
             return [(2, 1, 6, "", ("93.184.215.14", port))]
         with patch("asyncio.BaseEventLoop.getaddrinfo", new=only_public):
             self.assertEqual(await resolve_public_ip("example.org"),
@@ -59,7 +59,7 @@ class PublicReaderSecurityTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_dns_resolution_timeout_fails_closed(self):
         import asyncio
-        async def hung_getaddrinfo(host, port, **kwargs):
+        async def hung_getaddrinfo(self_loop, host, port, **kwargs):
             raise asyncio.TimeoutError()
         with patch("asyncio.BaseEventLoop.getaddrinfo", new=hung_getaddrinfo):
             with self.assertRaises(OSError):
@@ -82,7 +82,7 @@ class PublicReaderSecurityTests(unittest.IsolatedAsyncioTestCase):
     async def test_public_ipv6_and_tls_failure_handled_safely(self):
         import ssl
         import socket
-        async def ipv6_only(host, port, **kwargs):
+        async def ipv6_only(self_loop, host, port, **kwargs):
             return [(socket.AF_INET6, socket.SOCK_STREAM, 6, "",
                      ("2606:4700:4700::1111", port, 0, 0))]
         with patch("asyncio.BaseEventLoop.getaddrinfo", new=ipv6_only):
@@ -181,6 +181,60 @@ class PublicReaderSecurityTests(unittest.IsolatedAsyncioTestCase):
                          ["www.w3.org","developer.mozilla.org","www.gov.uk"])
         self.assertEqual(sum(x["read_status"] == "verified_page_excerpt"
                              for x in result), 3)
+
+    def test_curated_fallback_requires_explicit_wcag_institutions(self):
+        from source_reader import accessibility_official_fallbacks, requested_wcag_hosts
+        query = "Bandingkan WCAG 2.2 daripada W3C, MDN dan GOV.UK."
+        hosts = requested_wcag_hosts(query)
+        self.assertEqual(hosts, {"www.w3.org", "developer.mozilla.org", "www.gov.uk"})
+        refs = accessibility_official_fallbacks(query, [])
+        self.assertEqual({httpx.URL(x["url"]).host for x in refs}, hosts)
+        self.assertEqual(accessibility_official_fallbacks("What is WCAG?", []), [])
+        self.assertEqual(accessibility_official_fallbacks("W3C MDN GOV.UK overview", []), [])
+        self.assertEqual(accessibility_official_fallbacks(
+            query, [{"url": "https://developer.mozilla.org/en-US/docs/Web/Accessibility/Keyboard"}]
+        ).__len__(), 2)
+
+    async def test_wcag_missing_institutions_are_fetched_as_primary_evidence(self):
+        question = "Bandingkan WCAG 2.2 daripada W3C, MDN dan GOV.UK."
+        sources = [{"title": "WCAG 2.2 overview", "url": "https://www.w3.org/WAI/standards-guidelines/wcag/",
+                    "provider": "Bing RSS", "snippet": "Accessibility WCAG", "published": ""}]
+        visited = []
+        def mock(req):
+            visited.append(str(req.url))
+            return httpx.Response(200, headers={"content-type": "text/html"},
+                                  content=b"<html><main><h1>WCAG 2.2 accessibility</h1>"
+                                          b"<p>WCAG accessibility guidance for public services, developers,"
+                                          b" and accessible web content.</p></main></html>")
+        async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as cli:
+            with patch.dict("os.environ", {"ENABLE_GENERAL_PUBLIC_READER": "1"}):
+                items = await enrich_with_read_excerpts(question, sources, client=cli)
+        self.assertEqual({httpx.URL(url).host for url in visited},
+                         {"www.w3.org", "developer.mozilla.org", "www.gov.uk"})
+        self.assertEqual(len(visited), 3)
+        self.assertEqual(sum(x["read_status"] == "verified_page_excerpt" for x in items), 3)
+
+    async def test_failed_curated_fallback_never_claims_to_be_read(self):
+        question = "WCAG 2.2 comparison MDN and GOV.UK"
+        def mock(req):
+            return httpx.Response(403)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as cli:
+            with patch.dict("os.environ", {"ENABLE_GENERAL_PUBLIC_READER": "1"}):
+                items = await enrich_with_read_excerpts(question, [], client=cli)
+        self.assertEqual(len(items), 2)
+        self.assertTrue(all(x["read_status"] == "page_unavailable" for x in items))
+        from free_research import references_text, evidence_text
+        self.assertNotIn("Petikan halaman diambil", references_text(items))
+        self.assertNotIn("FETCHED PAGE EXCERPT", evidence_text(items))
+
+    async def test_disabled_flag_keeps_curated_fallback_off(self):
+        async with httpx.AsyncClient(transport=httpx.MockTransport(
+            lambda req: self.fail("disabled reader must not fetch")
+        )) as cli:
+            with patch.dict("os.environ", {"ENABLE_GENERAL_PUBLIC_READER": "0"}):
+                items = await enrich_with_read_excerpts(
+                    "WCAG 2.2 comparison W3C MDN GOV.UK", [], client=cli)
+        self.assertEqual(items, [])
 
     async def test_malicious_metadata_rejected_before_network(self):
         sources = [{"title":"evil","url":"https://127.0.0.1/api/token",

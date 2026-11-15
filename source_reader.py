@@ -81,6 +81,47 @@ def official_science_seeds(question: str) -> list[dict]:
     return refs
 
 
+# Exact public primary-source landing pages, used only when WCAG and the
+# named institution are explicitly requested. These are NOT user URLs.
+# Every fallback still goes through the same DNS-pinned bounded HTTPS reader.
+ACCESSIBILITY_OFFICIAL_DOCS = {
+    "w3c": ("https://www.w3.org/WAI/standards-guidelines/wcag/",
+            "W3C WAI: WCAG 2 Overview", "www.w3.org"),
+    "mdn": ("https://developer.mozilla.org/en-US/docs/Web/Accessibility/Guides/Understanding_WCAG",
+            "MDN: Understanding WCAG", "developer.mozilla.org"),
+    "govuk": ("https://www.gov.uk/guidance/accessibility-requirements-for-public-sector-websites-and-apps",
+              "GOV.UK: Accessibility requirements", "www.gov.uk"),
+}
+
+
+def requested_wcag_hosts(question: str) -> set[str]:
+    if "wcag" not in set(search_query_terms(question)):
+        return set()
+    patterns = {
+        "w3c": r"\bw3c\b",
+        "mdn": r"\bmdn\b",
+        "govuk": r"\bgov[.\s-]*uk\b",
+    }
+    return {host for name, (_, _, host) in ACCESSIBILITY_OFFICIAL_DOCS.items()
+            if re.search(patterns[name], question, re.IGNORECASE)}
+
+
+def accessibility_official_fallbacks(question: str, sources: list[dict]) -> list[dict]:
+    """Use fixed, reviewed primary pages only when scoped discovery misses a named host."""
+    wanted_hosts = requested_wcag_hosts(question)
+    discovered_hosts = {urlsplit(ref.get("url", "")).hostname for ref in sources
+                        if safe_public_article_url(ref.get("url", ""))}
+    out = []
+    for url, title, host in ACCESSIBILITY_OFFICIAL_DOCS.values():
+        if host not in wanted_hosts or host in discovered_hosts:
+            continue
+        if not safe_public_article_url(url):
+            continue
+        out.append({"provider": "Curated official WCAG fallback",
+                    "title": title, "url": url, "snippet": "", "published": ""})
+    return out
+
+
 def identity_official_docs(question: str) -> list[dict]:
     words = set(search_query_terms(question))
     if not words.intersection({"passkeys", "passkey", "fido2", "totp",
@@ -597,11 +638,19 @@ async def enrich_with_read_excerpts(
     # public-search results may enter the bounded reader. Limit to three pages
     # across all methods, avoid adding domains as explicit allowlist entries.
     general_candidate_urls = set()
+    fallback_refs = []
     if os.environ.get("ENABLE_GENERAL_PUBLIC_READER", "0") == "1" and not official_google and not identity_docs:
+        fallback_refs = accessibility_official_fallbacks(question, sources)
+        wanted_hosts = requested_wcag_hosts(question)
         # Prefer independent hostnames: three W3C navigation pages should not
         # crowd out an MDN or GOV.UK result already found by public search.
         seen_hosts = {urlsplit(ref["url"]).hostname for ref in approved_candidates}
-        for ref in sources:
+        # Reserve capacity for explicitly requested institutions before generic
+        # top-ranked results; otherwise three W3C/noisy RSS hits can crowd out
+        # the independent MDN and GOV.UK evidence entirely.
+        targeted = [ref for ref in sources
+                    if urlsplit(ref.get("url", "")).hostname in wanted_hosts]
+        for ref in targeted + fallback_refs + sources:
             url = ref.get("url", "")
             host = urlsplit(url).hostname
             if (len(approved_candidates) >= capacity or url in seen
@@ -656,7 +705,13 @@ async def enrich_with_read_excerpts(
     loaded = await asyncio.gather(*(load(x) for x in approved_candidates))
     validated = [item for item in loaded if item]
     read_urls = {item["url"] for item in validated}
+    # A failed curated attempt is neither a read excerpt nor search metadata.
+    # Keep this distinction visible instead of silently omitting a named host.
+    fallback_urls = {ref["url"] for ref in fallback_refs}
+    unavailable = [{**ref, "read_status": "page_unavailable"}
+                   for ref in approved_candidates
+                   if ref["url"] in fallback_urls and ref["url"] not in read_urls]
     remaining = [{**s, "read_status": "search_metadata_only"} for s in sources
                  if s.get("url") not in read_urls]
-    # Official content first, community/search metadata second.
-    return (validated + remaining)[:8]
+    # Only actually extracted page content may be labeled verified.
+    return (validated + unavailable + remaining)[:8]

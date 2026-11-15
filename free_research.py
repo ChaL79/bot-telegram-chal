@@ -576,10 +576,14 @@ def evidence_text(sources: list[dict]) -> str:
             "Title: " + clean(source["title"], 115),
             "URL: " + source["url"],
             "Evidence type: FETCHED PAGE EXCERPT (selected text, not entire page)"
-            if read else "Evidence type: SEARCH METADATA ONLY (page not read)",
+            if read else ("Evidence type: OFFICIAL PAGE FETCH FAILED (not read)"
+                          if source.get("read_status") == "page_unavailable"
+                          else "Evidence type: SEARCH METADATA ONLY (page not read)"),
         ]
         if read:
             parts.append("Untrusted page excerpt: " + clean(source["excerpt"], 2400))
+        elif source.get("read_status") == "page_unavailable":
+            parts.append("Note: No page text was retrieved or quoted.")
         else:
             parts.append("Snippet/headline only: " + clean(source.get("snippet", ""), 300))
         if source.get("published"):
@@ -592,7 +596,8 @@ def references_text(sources: list[dict]) -> str:
     return "\n\nSenarai sumber (petikan terpilih atau metadata; bukan semakan artikel penuh):\n" + "\n".join(
         f"[{i}] {clean(source['title'], 95)} "
         + ("[Petikan halaman diambil]" if source.get("read_status") == "verified_page_excerpt"
-           and source.get("excerpt") else "[Metadata sahaja]")
+           and source.get("excerpt") else ("[Gagal diakses; halaman tidak dibaca]"
+            if source.get("read_status") == "page_unavailable" else "[Metadata sahaja]"))
         + f"\n{source['url']}"
         for i, source in enumerate(sources[:MAX_SOURCES], start=1)
     )
