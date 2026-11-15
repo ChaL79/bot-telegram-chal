@@ -170,7 +170,12 @@ def recommended_official_docs(question: str) -> list[dict]:
         return []
     refs = [{"provider": "Official Python documentation", "title": title,
              "url": url, "snippet": "", "published": ""}]
-    if "asyncio" in terms and ("rate" in terms or "limiting" in terms or "limiter" in terms):
+    # A directly requested library must be looked up even if the user's wording
+    # does not include generic rate-limiting vocabulary.
+    if "aiolimiter" in terms or ("asyncio" in terms and (
+        "rate" in terms or "limiting" in terms or "limiter" in terms
+        or ("leaky" in terms and "bucket" in terms)
+    )):
         refs.append({"provider": "aiolimiter official documentation",
                      "title": "aiolimiter asyncio rate limiting documentation",
                      "url": AIOLIMITER_DOCS, "snippet": "", "published": ""})
