@@ -150,10 +150,53 @@ class SourceReaderTests(unittest.IsolatedAsyncioTestCase):
         prompt = "Compare Gemini AI Google AI Studio Google Antigravity NotebookLM Google Flow."
         async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as client:
             enriched = await enrich_with_read_excerpts(prompt, meta, client=client)
-        self.assertEqual(len(hits), 8)
+        self.assertEqual(len(hits), 9)
         self.assertEqual(len(enriched), 8)
         self.assertTrue(all(x["read_status"] == "verified_page_excerpt" for x in enriched))
         self.assertIn("Petikan halaman diambil", references_text(enriched))
+
+    async def test_one_hop_approved_google_locale_redirect(self):
+        from source_reader import GOOGLE_DOCS
+        url = GOOGLE_DOCS["studio_free"][0]
+        target = url + "?hl=en"
+        urls = []
+        def mock(req):
+            urls.append(str(req.url))
+            if str(req.url) == url:
+                return httpx.Response(301, headers={"location": target})
+            if str(req.url) == target:
+                return httpx.Response(200, headers={"content-type": "text/html"},
+                    content=b"<html><main><h1>Gemini API Free Tier pricing</h1><p>Free model access and pricing details</p></main></html>")
+            raise AssertionError("Unexpected redirect destination")
+        async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as client:
+            value = await fetch_page_excerpt(url, "Gemini API Free Tier pricing", client=client)
+        self.assertIn("Free model access", value)
+        self.assertEqual(urls, [url, target])
+
+    async def test_cross_host_or_unapproved_redirect_is_rejected(self):
+        from source_reader import GOOGLE_DOCS
+        url = GOOGLE_DOCS["studio_start"][0]
+        for target in ["https://evil.invalid/private", "https://accounts.google.com/",
+                       "http://ai.google.dev/gemini-api/docs/pricing",
+                       "https://ai.google.dev/gemini-api/docs/private?hl=en"]:
+            urls = []
+            def mock(req):
+                urls.append(str(req.url))
+                return httpx.Response(301, headers={"location": target})
+            async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as cli:
+                self.assertEqual(await fetch_page_excerpt(url,"Google AI Studio",client=cli),"")
+            self.assertEqual(len(urls), 1)
+
+    async def test_second_redirect_is_not_followed(self):
+        from source_reader import GOOGLE_DOCS
+        url = GOOGLE_DOCS["studio_free"][0]
+        urls=[]
+        def mock(req):
+            urls.append(str(req.url))
+            return httpx.Response(301,headers={"location":url+"?hl=en"})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as cli:
+            self.assertEqual(await fetch_page_excerpt(url,"Gemini API pricing",client=cli),"")
+        self.assertEqual(len(urls), 2)
 
     async def test_blocked_google_docs_remain_unverified_not_fabricated(self):
         from source_reader import GOOGLE_DOCS
