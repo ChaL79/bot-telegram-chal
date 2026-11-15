@@ -172,8 +172,57 @@ class MainText(HTMLParser):
         )
 
 
+# Model-specific price tables are easily lost on long pages when a generic
+# keyword scorer returns six unrelated lines from other models.
+_PRICING_MODEL_SECTIONS = (
+    ("gemini-3.5-flash-lite", re.compile(r"^\s*#{0,3}\s*Gemini\s+3\.5\s+Flash[- ]Lite\b", re.I)),
+    ("gemini-4-carbon", re.compile(r"^\s*#{0,3}\s*Gemini\s+4\s+Carbon\b", re.I)),
+)
+
+
+def _targeted_pricing_excerpt(text: str, question: str) -> str:
+    """Extract named models' Standard pricing rows, never another model's rows.
+
+    Target detection is strict: it only uses a section actually present in the
+    fetched document. No static/free-tier claims are injected by this method.
+    """
+    q = question.casefold()
+    requested = [(name, heading) for name, heading in _PRICING_MODEL_SECTIONS
+                 if name in q or name.replace("-", " ") in q]
+    if not requested:
+        return ""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    found = []
+    for model, heading in requested:
+        indices = [i for i, line in enumerate(lines) if heading.match(line)]
+        if not indices:
+            continue
+        start = indices[0]
+        end = len(lines)
+        for i in range(start + 1, len(lines)):
+            line = lines[i]
+            # Stop before Batch/Flex/Priority, or a new model heading.
+            if (re.match(r"^#{1,3}\s*(Batch|Flex|Priority)\b", line, flags=re.I)
+                    or re.match(r"^#{1,2}\s*Gemini\s+\d", line, flags=re.I)
+                    or re.match(r"^Gemini\s+\d+(?:[.]\d+)?\s+(?!API\b)", line, flags=re.I)):
+                end = i
+                break
+        section = "\n".join(lines[start:end])
+        # Require the actual model identifier and a pricing row nearby.
+        if (model in section.casefold()
+                and re.search(r"input price|output price|free tier", section, flags=re.I)):
+            found.append(section)
+    if not found:
+        return ""
+    per_model = MAX_EXCERPT if len(found) == 1 else MAX_EXCERPT // len(found)
+    return "\n\n".join(section[:per_model] for section in found)[:MAX_EXCERPT].strip()
+
+
 def select_relevant_excerpt(text: str, query: str) -> str:
-    """Take the most relevant page sections, not just the navigation / first lines."""
+    """Prefer exact named pricing sections, then generic topical excerpts."""
+    targeted = _targeted_pricing_excerpt(text, query)
+    if targeted:
+        return targeted
     terms = set(search_query_terms(query))
     parts = [p.strip() for p in text.splitlines() if len(p.strip()) >= 22]
     if not parts:
@@ -329,7 +378,13 @@ async def enrich_with_read_excerpts(
             break
 
     async def load(ref):
-        excerpt = await fetch_page_excerpt(ref["url"], ref.get("focus", question), client=client)
+        focus = ref.get("focus", question)
+        if (ref["url"] == GOOGLE_DOCS["studio_free"][0]
+                and any(model in question.casefold() for model, _ in _PRICING_MODEL_SECTIONS)):
+            # The specific model ID must reach section extraction; the fixed
+            # generic "pricing" focus previously hid it completely.
+            focus = question
+        excerpt = await fetch_page_excerpt(ref["url"], focus, client=client)
         if not excerpt:
             return None
         return {**ref, "excerpt": excerpt, "read_status": "verified_page_excerpt"}
