@@ -14,7 +14,10 @@ from urllib.parse import urlsplit, urljoin
 from typing import Optional
 
 import httpx
-from free_research import clean, search_query_terms
+from free_research import (
+    clean, search_query_terms, OFFICIAL_SCIENCE_HOSTS, SCIENCE_TOPIC_WORDS,
+    OFFICIAL_SCIENCE_SITES,
+)
 
 log = logging.getLogger("source_reader")
 MAX_PAGE_BYTES = 450_000
@@ -139,6 +142,24 @@ def is_approved_document_url(url: str) -> bool:
         host, path = p.hostname or "", p.path
         if url in GOOGLE_ALLOWED_URLS or url in IDENTITY_ALLOWED_URLS:
             return True
+        # General-purpose article discovery is allowed only on a small
+        # institution-domain registry. Paths are discovered via public search,
+        # NEVER composed from untrusted user-provided URLs or arbitrary hosts.
+        # Reject credentials, ports, query strings, fragments, IPs and file
+        # downloads. This does not expand to entire .gov or .org domains.
+        if host in OFFICIAL_SCIENCE_HOSTS:
+            if p.query or p.fragment or not path.startswith("/"):
+                return False
+            if any(x in path.lower() for x in ("/login", "/signin", "/account",
+                                                 "/admin", "/api/", "/wp-json/",
+                                                 "/search", "/feed", "/download")):
+                return False
+            if path.lower().endswith((".pdf", ".json", ".xml", ".zip", ".csv",
+                                       ".xlsx", ".docx", ".pptx", ".png", ".jpg",
+                                       ".jpeg", ".svg", ".txt", ".md")):
+                return False
+            return bool(re.fullmatch(r"/[A-Za-z0-9_./%-]{8,260}", path))
+
         # Some Google developer docs canonicalize to an explicit English locale.
         # Allow only that locale on an exactly approved ai.google.dev path.
         if host == "ai.google.dev" and not p.fragment and p.query == "hl=en":
@@ -546,6 +567,15 @@ async def enrich_with_read_excerpts(
             # generic "pricing" focus previously hid it completely.
             focus = question
         excerpt = await fetch_page_excerpt(ref["url"], focus, client=client)
+        # An institution's identity alone is not proof that the fetched page
+        # answers the scientific question (e.g. hurricane satellite imagery).
+        host = urlsplit(ref["url"]).hostname or ""
+        if excerpt and host in OFFICIAL_SCIENCE_HOSTS:
+            topical = set(search_query_terms(question)) & SCIENCE_TOPIC_WORDS
+            matches = set(re.findall(r"[a-z0-9]+", excerpt.casefold())) & topical
+            if len(matches) < min(2, len(topical)):
+                log.info("Official scientific document not topical host=%s", host)
+                excerpt = ""
         if not excerpt:
             return None
         return {**ref, "excerpt": excerpt, "read_status": "verified_page_excerpt"}
