@@ -18,6 +18,23 @@ import httpx
 log = logging.getLogger("free_research")
 MAX_BYTES = 550_000
 MAX_SOURCES = 8
+
+# No open-web crawling: discovery can focus on real official institution sites,
+# and the reader only fetches article URLs on these exact, trusted hosts.
+# This is an extensible institution-domain registry, not a guessed URL list.
+OFFICIAL_SCIENCE_SITES = {
+    "noaa": ("www.climate.gov", "www.noaa.gov"),
+    "nasa": ("sealevel.nasa.gov", "science.nasa.gov"),
+    "ipcc": ("www.ipcc.ch", "ipcc.ch"),
+}
+OFFICIAL_SCIENCE_HOSTS = frozenset(
+    host for hosts in OFFICIAL_SCIENCE_SITES.values() for host in hosts
+)
+SCIENCE_TOPIC_WORDS = frozenset({
+    "sea", "level", "rise", "rising", "thermal", "expansion",
+    "ocean", "warming", "glaciers", "glacier", "ice", "sheets", "melting",
+    "climate", "temperature", "water",
+})
 WEB_HEADERS = {
     "User-Agent": "Mozilla/5.0 (compatible; ChaL79Bot/1.4; personal research)",
     "Accept": "application/rss+xml,application/xml,application/json,text/xml;q=0.8,*/*;q=0.1",
@@ -63,6 +80,9 @@ TOPIC_ANCHORS = frozenset({
     "passkeys", "passkey", "fido2", "totp", "mfa", "otp", "phishing",
     "authenticator", "authentication", "webauthn", "cybersecurity",
     "nist", "cisa", "fido", "sms", "sim", "swapping",
+    "noaa", "nasa", "ipcc", "sea", "level", "rise",
+    "thermal", "expansion", "ocean", "glaciers", "glacier",
+    "ice", "sheets", "melting", "climate",
 })
 IDENTITY_ANCHORS = frozenset({
     "passkeys", "passkey", "fido2", "totp", "mfa", "otp", "phishing",
@@ -208,6 +228,19 @@ def source_relevance(item: dict, query_terms: list[str]) -> int:
             return 0
     if required and not (required & matched):
         return 0
+    # Requests comparing independent scientific institutions must not accept
+    # a result just because it mentions a generic word such as "climate".
+    organizations = set(sought) & set(OFFICIAL_SCIENCE_SITES)
+    if organizations and len(organizations) >= 2:
+        subject = set(sought) & SCIENCE_TOPIC_WORDS
+        found = title_terms | content_terms
+        if len(found & subject) < min(2, len(subject)):
+            return 0
+        if url.hostname not in OFFICIAL_SCIENCE_HOSTS:
+            return 0
+        # A NOAA article naturally says NOAA in its title, but a NASA article
+        # should not be forced to include NOAA/IPCC as well.
+        return len(matched) + 2 * len(matched & title_terms) + 6
     minimum = 2 if len(set(sought)) >= 3 else len(set(sought))
     if len(matched) < minimum:
         return 0
@@ -323,6 +356,34 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
             log.info("Bing RSS parsed %d metadata results", len(items))
             return items
 
+        # Independent official sources are discovered through the same free
+        # Bing RSS endpoint, without constructing or guessing document URLs.
+        # One short site-scoped lookup per organization, max three in total.
+        organizations = [
+            org for org in OFFICIAL_SCIENCE_SITES
+            if org in terms
+        ][:3]
+        subjects = [x for x in terms if x in SCIENCE_TOPIC_WORDS][:5]
+        async def get_official_site(org: str):
+            host = OFFICIAL_SCIENCE_SITES[org][0]
+            q = "site:" + host + " " + " ".join(subjects or terms[:4])
+            resp = await session.get(
+                "https://www.bing.com/search",
+                params={"q": q, "format": "rss", "mkt": "en-US"},
+                timeout=7.0,
+            )
+            if resp.status_code != 200:
+                log.info("Official institution RSS unavailable org=%s status=%s",
+                         org, resp.status_code)
+                return []
+            items = parse_rss(resp.content, "Official site discovery via Bing RSS", 6)
+            selected = [i for i in items
+                        if urlsplit(i["url"]).hostname in OFFICIAL_SCIENCE_SITES[org]
+                        and not urlsplit(i["url"]).path.lower().endswith((".pdf", ".xml", ".json"))]
+            log.info("Official institution site discovery org=%s candidates=%d",
+                     org, len(selected))
+            return selected[:4]
+
         async def get_wikipedia():
             resp = await session.get(
                 "https://en.wikipedia.org/w/api.php",
@@ -388,6 +449,7 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
             return items
 
         providers = [get_bing(), get_wikipedia(), get_news()]
+        providers.extend(get_official_site(org) for org in organizations)
         if tech:
             # Relevant community references are helpful for programming questions.
             # Not used as evidence of official API behavior.
@@ -406,6 +468,20 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
                 if score > 0:
                     ranked.append((score, item))
         ranked.sort(key=lambda pair: pair[0], reverse=True)
+        # Prefer one strongly-relevant article from each requested institution,
+        # instead of three near-duplicate pages from a single organization.
+        if len(organizations) >= 2:
+            institutional, used_urls = [], set()
+            for org in organizations:
+                for _score, item in ranked:
+                    if (urlsplit(item["url"]).hostname in OFFICIAL_SCIENCE_SITES[org]
+                            and item["url"] not in used_urls):
+                        institutional.append((_score, item))
+                        used_urls.add(item["url"])
+                        break
+            ranked = institutional + [
+                pair for pair in ranked if pair[1]["url"] not in used_urls
+            ]
         log.info("Public source search selected %d of %d unique results (technical=%s)",
                  min(len(ranked), MAX_SOURCES), len(urls), tech)
         return [item for _score, item in ranked[:MAX_SOURCES]]
