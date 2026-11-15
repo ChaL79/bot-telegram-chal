@@ -657,6 +657,39 @@ No content on data practices.
         self.assertTrue(all(x["read_status"] == "verified_page_excerpt" for x in sources))
         self.assertTrue(all("phishing" in x["excerpt"].lower() for x in sources))
 
+    async def test_sea_level_seeds_fetch_real_noaa_nasa_with_empty_search(self):
+        from source_reader import official_science_seeds, SCIENCE_SEA_LEVEL_DOCS
+        question = ("Compare NOAA NASA IPCC global sea level rise from thermal "
+                    "expansion of ocean water and melting land ice")
+        refs = official_science_seeds(question)
+        self.assertEqual({x["url"] for x in refs},
+                         {x[0] for x in SCIENCE_SEA_LEVEL_DOCS})
+        self.assertEqual(official_science_seeds("NIST authentication AAL3"), [])
+        visited = []
+        def mock(req):
+            visited.append(str(req.url))
+            if str(req.url) not in {x[0] for x in SCIENCE_SEA_LEVEL_DOCS}:
+                self.fail("Never fetch unexpected URL")
+            return httpx.Response(200, headers={"content-type":"text/html"},
+                 content=b"<html><main><article><h1>Global Sea Level Rise</h1>"
+                         b"<p>Thermal expansion of warming ocean water and "
+                         b"melting land ice contribute to rising sea level.</p>"
+                         b"</article></main></html>")
+        async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as client:
+            sources = await enrich_with_read_excerpts(question, [], client=client)
+        self.assertEqual(len(visited), 2)
+        self.assertEqual(len(sources), 2)
+        self.assertTrue(all(x["read_status"] == "verified_page_excerpt" for x in sources))
+        self.assertTrue(all("thermal expansion" in x["excerpt"] for x in sources))
+
+    async def test_sea_level_seed_blocked_stays_unverified(self):
+        question = "Compare NOAA NASA IPCC sea level rise thermal expansion"
+        async with httpx.AsyncClient(transport=httpx.MockTransport(
+            lambda req: httpx.Response(403)
+        )) as client:
+            sources = await enrich_with_read_excerpts(question, [], client=client)
+        self.assertEqual(sources, [])
+
     def test_science_official_domain_article_allowlist(self):
         good = [
             "https://www.climate.gov/news-features/understanding-climate/climate-change-global-sea-level",
