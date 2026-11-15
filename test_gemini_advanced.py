@@ -32,6 +32,44 @@ class AdvancedTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("tools", seen[0][1])
         self.assertIn(RESEARCH_MODEL, seen[0][0])
 
+    async def test_deepdive_single_request_55s_timeout_no_retry(self):
+        from gemini_advanced import GEMINI_READ_TIMEOUT
+        calls = []
+        def search_mock(req):
+            if req.url.host == "www.bing.com":
+                return httpx.Response(200, content=b"""<rss><channel><item>
+                <title>Python asyncio technical reference</title>
+                <link>https://docs.python.org/3/library/asyncio-sync.html</link>
+                <description>Python asyncio semaphore documentation</description>
+                </item></channel></rss>""")
+            return httpx.Response(403)
+        def api_mock(req):
+            calls.append(str(req.url))
+            raise httpx.ReadTimeout("read timed out", request=req)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(search_mock)) as search:
+            async with httpx.AsyncClient(transport=httpx.MockTransport(api_mock)) as api:
+                answer, ok = await run_advanced(
+                    "Python asyncio semaphore", "TEST_KEY", "deepdive",
+                    search_client=search, client=api)
+        self.assertFalse(ok)
+        self.assertEqual(len(calls), 1)
+        self.assertIn("masa tamat", answer)
+        self.assertIn("BUKAN analisis Gemini", answer)
+        self.assertEqual(GEMINI_READ_TIMEOUT["deepdive"], 55.0)
+        self.assertEqual(GEMINI_READ_TIMEOUT["power"], 35.0)
+
+    async def test_power_single_network_failure_no_retry(self):
+        calls = []
+        def api_mock(req):
+            calls.append(req)
+            raise httpx.ConnectError("network unavailable", request=req)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(api_mock)) as api:
+            answer, ok = await run_advanced("Explain", "TEST_KEY", "power", client=api)
+        self.assertFalse(ok)
+        self.assertEqual(len(calls), 1)
+        self.assertIn("tidak dapat dihubungi", answer)
+        self.assertNotIn("Petikan halaman", answer)
+
     async def test_503_preserves_sources_without_fake_ai_analysis_or_retry(self):
         requests = []
         def search_mock(req):
