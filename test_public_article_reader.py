@@ -43,7 +43,7 @@ class PublicReaderSecurityTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(safe_public_article_url(url), url)
 
     async def test_dns_fail_closed_when_private_or_mixed(self):
-        async def mocked_getaddrinfo(host, port, **kwargs):
+        async def mocked_getaddrinfo(self_loop, host, port, **kwargs):
             return [
                 (2, 1, 6, "", ("93.184.215.14", port)),
                 (2, 1, 6, "", ("127.0.0.1", port)),
@@ -51,7 +51,7 @@ class PublicReaderSecurityTests(unittest.IsolatedAsyncioTestCase):
         with patch("asyncio.BaseEventLoop.getaddrinfo", new=mocked_getaddrinfo):
             with self.assertRaises(OSError):
                 await resolve_public_ip("example.org")
-        async def only_public(host, port, **kwargs):
+        async def only_public(self_loop, host, port, **kwargs):
             return [(2, 1, 6, "", ("93.184.215.14", port))]
         with patch("asyncio.BaseEventLoop.getaddrinfo", new=only_public):
             self.assertEqual(await resolve_public_ip("example.org"),
@@ -59,7 +59,7 @@ class PublicReaderSecurityTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_dns_resolution_timeout_fails_closed(self):
         import asyncio
-        async def hung_getaddrinfo(host, port, **kwargs):
+        async def hung_getaddrinfo(self_loop, host, port, **kwargs):
             raise asyncio.TimeoutError()
         with patch("asyncio.BaseEventLoop.getaddrinfo", new=hung_getaddrinfo):
             with self.assertRaises(OSError):
@@ -82,7 +82,7 @@ class PublicReaderSecurityTests(unittest.IsolatedAsyncioTestCase):
     async def test_public_ipv6_and_tls_failure_handled_safely(self):
         import ssl
         import socket
-        async def ipv6_only(host, port, **kwargs):
+        async def ipv6_only(self_loop, host, port, **kwargs):
             return [(socket.AF_INET6, socket.SOCK_STREAM, 6, "",
                      ("2606:4700:4700::1111", port, 0, 0))]
         with patch("asyncio.BaseEventLoop.getaddrinfo", new=ipv6_only):
