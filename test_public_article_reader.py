@@ -1,0 +1,112 @@
+import unittest
+import httpx
+from unittest.mock import AsyncMock, patch
+
+from public_article_reader import (
+    safe_public_article_url, resolve_public_ip, read_public_html,
+)
+from source_reader import enrich_with_read_excerpts
+
+
+class PublicReaderSecurityTests(unittest.IsolatedAsyncioTestCase):
+    def test_only_public_https_article_shapes(self):
+        valid = [
+            "https://www.w3.org/TR/WCAG22/",
+            "https://developer.mozilla.org/en-US/docs/Web/Accessibility/Guides/Understanding_WCAG/Keyboard",
+            "https://www.gov.uk/service-manual/helping-people-to-use-your-service/testing-for-accessibility",
+        ]
+        for url in valid:
+            self.assertTrue(safe_public_article_url(url), url)
+        unsafe = [
+            "http://www.w3.org/TR/WCAG22/",
+            "https://127.0.0.1/internal",
+            "https://169.254.169.254/latest/meta-data",
+            "https://[::1]/admin",
+            "https://localhost/private",
+            "https://localhost.localdomain/private",
+            "https://internal.local/api/metadata",
+            "https://evil.test/abc",
+            "https://w3.org.evil.test/TR/WCAG22/",
+            "https://user:secret@www.w3.org/TR/WCAG22/",
+            "https://www.w3.org:8080/TR/WCAG22/",
+            "https://www.w3.org/TR/WCAG22/?token=abc",
+            "https://www.w3.org/TR/WCAG22/#fragment",
+            "https://www.w3.org/%2e%2e/internal",
+            "https://www.w3.org/.git/config",
+            "https://www.w3.org/admin/users",
+            "https://www.w3.org/TR/WCAG22/report.pdf",
+            "https://www.w3.org//hidden",
+            "https://www.w3.org/..//hidden",
+            "https://www.w3.org/a b",
+        ]
+        for url in unsafe:
+            self.assertFalse(safe_public_article_url(url), url)
+
+    async def test_dns_fail_closed_when_private_or_mixed(self):
+        async def mocked_getaddrinfo(host, port, **kwargs):
+            return [
+                (2, 1, 6, "", ("93.184.215.14", port)),
+                (2, 1, 6, "", ("127.0.0.1", port)),
+            ]
+        with patch("asyncio.BaseEventLoop.getaddrinfo", new=mocked_getaddrinfo):
+            with self.assertRaises(OSError):
+                await resolve_public_ip("example.org")
+        async def only_public(host, port, **kwargs):
+            return [(2, 1, 6, "", ("93.184.215.14", port))]
+        with patch("asyncio.BaseEventLoop.getaddrinfo", new=only_public):
+            self.assertEqual(await resolve_public_ip("example.org"),
+                             "93.184.215.14")
+
+    async def test_no_redirect_no_binary_no_excessive_content(self):
+        url = "https://www.w3.org/TR/WCAG22/"
+        for response in [
+            httpx.Response(302, headers={"location":"http://127.0.0.1/private"}),
+            httpx.Response(200, headers={"content-type":"application/pdf"},
+                           content=b"%PDF"),
+            httpx.Response(200, headers={"content-type":"text/html",
+                                         "content-length":"999999"}),
+            httpx.Response(200, headers={"content-type":"text/html"},
+                           content=b"a"*350001),
+        ]:
+            requests = []
+            def mock(req):
+                requests.append(str(req.url))
+                return response
+            async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as cli:
+                self.assertEqual(await read_public_html(url, client=cli), "")
+            self.assertEqual(requests, [url])
+
+    async def test_search_discovered_multi_domain_excerpts_without_allowlists(self):
+        sources = [
+            {"title":"WCAG 2.2 Focus Not Obscured","url":"https://www.w3.org/TR/WCAG22/",
+             "provider":"Bing RSS", "snippet":"Focus visibility keyboard","published":""},
+            {"title":"MDN keyboard accessibility","url":"https://developer.mozilla.org/en-US/docs/Web/Accessibility/Keyboard",
+             "provider":"Bing RSS", "snippet":"Keyboard focus testing","published":""},
+        ]
+        requested = []
+        def mock(req):
+            requested.append(str(req.url))
+            return httpx.Response(200, headers={"content-type":"text/html"},
+                content=b"<html><main><h1>WCAG 2.2 Keyboard Accessibility</h1>"
+                b"<p>Keyboard focus visibility and keyboard operation are essential."
+                b" Focus Not Obscured helps people navigate pages.</p></main></html>")
+        question = "Compare WCAG 2.2 keyboard accessibility focus visibility testing"
+        async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as client:
+            results = await enrich_with_read_excerpts(question, sources, client=client)
+        self.assertEqual(len(requested), 2)
+        self.assertEqual(len(results), 2)
+        self.assertTrue(all(x["read_status"]=="verified_page_excerpt" for x in results))
+        self.assertTrue(all("Keyboard" in x["excerpt"] for x in results))
+
+    async def test_malicious_metadata_rejected_before_network(self):
+        sources = [{"title":"evil","url":"https://127.0.0.1/api/token",
+                    "provider":"Bing RSS", "snippet":"WCAG","published":""}]
+        async with httpx.AsyncClient(transport=httpx.MockTransport(
+            lambda req: self.fail("No request allowed")
+        )) as client:
+            items = await enrich_with_read_excerpts("WCAG keyboard", sources,client=client)
+        self.assertEqual(items[0]["read_status"],"search_metadata_only")
+
+
+if __name__ == "__main__":
+    unittest.main()
