@@ -116,7 +116,7 @@ class SourceReaderTests(unittest.IsolatedAsyncioTestCase):
         prompt = ("Deep dive compare Gemini AI Google AI Studio Google Antigravity "
                   "NotebookLM Google Flow available in Brunei free pricing")
         refs = google_official_docs(prompt)
-        self.assertEqual(len(refs), len(GOOGLE_DOCS) - 1)  # omit generic Gemini overview for comparison
+        self.assertEqual(len(refs), len(GOOGLE_DOCS) - 2)  # exclude generic overview and unrelated privacy terms
         self.assertTrue(all(x["provider"] == "Official Google documentation" for x in refs))
         self.assertTrue(all(x["url"].startswith("https://") for x in refs))
         self.assertEqual(google_official_docs("Python asyncio semaphore"), [])
@@ -353,6 +353,67 @@ Not available
         self.assertEqual(len(found), 1)
         self.assertIn("Gemini 3.5 Flash-Lite", found[0]["excerpt"])
         self.assertNotIn("Gemini 4 Carbon", found[0]["excerpt"])
+
+    def test_gemini_api_privacy_selects_official_terms_before_noise(self):
+        from source_reader import GOOGLE_DOCS, google_official_docs
+        q = ("Research the official Google Gemini API pricing and privacy documentation. "
+             "Verify whether Free Tier inputs may be used to improve Google's products "
+             "and compare unpaid services versus paid services.")
+        refs = google_official_docs(q)
+        self.assertGreaterEqual(len(refs), 2)
+        self.assertEqual(refs[0]["url"], GOOGLE_DOCS["api_terms"][0])
+        self.assertIn(GOOGLE_DOCS["studio_free"][0], [r["url"] for r in refs])
+        self.assertEqual(google_official_docs("Google Gemini API coding quickstart"), [])
+
+    def test_privacy_terms_extracts_only_actual_unpaid_and_paid_statements(self):
+        from source_reader import _privacy_terms_excerpt
+        doc = """Gemini API Additional Terms of Service
+Age Requirements
+Use Restrictions
+Unpaid Services
+Any Services offered free of charge are Unpaid Services.
+How Google Uses Your Data
+When you use Unpaid Services, including Google AI Studio and unpaid Gemini API quota, Google uses content you submit and generated responses to provide, improve, and develop Google products and machine learning technologies.
+To help with quality, human reviewers may read, annotate, and process API input and output. Do not submit sensitive, confidential, or personal information.
+Paid Services
+Access through an active Cloud Billing account is a Paid Service.
+How Google Uses Your Data
+When you use Paid Services, Google doesn't use your prompts or responses to improve our products.
+For Paid Services Google logs prompts for a limited time for abuse prevention.
+"""
+        excerpt = _privacy_terms_excerpt(doc)
+        self.assertIn("Unpaid Services", excerpt)
+        self.assertIn("Google uses content you submit", excerpt)
+        self.assertIn("human reviewers", excerpt)
+        self.assertIn("Paid Services", excerpt)
+        self.assertIn("Google doesn't use your prompts", excerpt)
+        self.assertNotIn("Age Requirements", excerpt)
+        self.assertEqual(_privacy_terms_excerpt("Unpaid Services\nPaid Services\nNo actual data-use statements"), "")
+
+    async def test_privacy_terms_evidence_is_real_or_absent(self):
+        from source_reader import GOOGLE_DOCS
+        requested = []
+        doc = (b"<html><main><h1>Gemini API Additional Terms of Service</h1>"
+               b"<h2>Unpaid Services</h2><h3>How Google Uses Your Data</h3>"
+               b"<p>When you use Unpaid Services Google uses prompts and generated responses to improve its products.</p>"
+               b"<p>Human reviewers may read, annotate, and process API input and output. Do not submit sensitive information.</p>"
+               b"<h2>Paid Services</h2><h3>How Google Uses Your Data</h3>"
+               b"<p>When you use Paid Services Google doesn't use your prompts or responses to improve our products.</p>"
+               b"</main></html>")
+        def mock(req):
+            requested.append(str(req.url))
+            if str(req.url) == GOOGLE_DOCS["api_terms"][0]:
+                return httpx.Response(200, headers={"content-type":"text/html"}, content=doc)
+            return httpx.Response(403)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as client:
+            sources = await enrich_with_read_excerpts("Gemini API Free Tier privacy and paid tier data use",[],client=client)
+        self.assertIn(GOOGLE_DOCS["api_terms"][0], requested)
+        self.assertEqual(len(sources), 1)
+        self.assertEqual(sources[0]["read_status"], "verified_page_excerpt")
+        self.assertIn("Unpaid Services", sources[0]["excerpt"])
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda req: httpx.Response(403))) as client:
+            none = await enrich_with_read_excerpts("Gemini API Free Tier privacy",[],client=client)
+        self.assertEqual(none, [])
 
     def test_official_doc_selection_and_no_fabricated_page(self):
         self.assertEqual(recommended_official_docs("Python asyncio.Semaphore")[0]["url"], OFFICIAL_SEMAPHORE)

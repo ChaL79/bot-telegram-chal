@@ -39,6 +39,9 @@ GOOGLE_DOCS = {
     "studio_free": ("https://aistudio.google.com/docs/pricing",
                     "Gemini API free and paid pricing",
                     "Gemini API Free Tier limited models paid pricing"),
+    "api_terms": ("https://ai.google.dev/gemini-api/terms",
+                  "Gemini API Additional Terms - Unpaid and Paid data use",
+                  "Gemini API Unpaid Services Paid Services privacy use human review"),
     "antigravity_guide": ("https://antigravity.google/docs/getting-started",
                           "Google Antigravity getting started", "Antigravity coding agents IDE CLI"),
     "antigravity_free": ("https://antigravity.google/pricing",
@@ -60,6 +63,15 @@ def google_official_docs(question: str) -> list[dict]:
     if not google_context:
         return []
     requested = []
+    # Gemini API privacy inquiries must use the contract governing data use,
+    # not just generic Google News or the consumer Gemini privacy policy.
+    privacy_topic = bool(re.search(
+        r"\b(?:privacy|confidential|sensitive|personal data|data use|training|"
+        r"train|human review|improve.*products|dasar privasi|data sulit)\b", q
+    ))
+    api_context = "gemini api" in q or "gemini" in q and "api" in q
+    if api_context and privacy_topic:
+        requested.extend(["api_terms", "studio_free"])
     # "Google AI Studio" is a developer product, NOT a request to research the
     # consumer Gemini app. Avoid spending the first source slots on wrong products.
     consumer_gemini = any(x in q for x in ("gemini ai", "gemini app", "gemini assistant"))
@@ -218,6 +230,39 @@ def _targeted_pricing_excerpt(text: str, question: str) -> str:
     return "\n\n".join(section[:per_model] for section in found)[:MAX_EXCERPT].strip()
 
 
+def _privacy_terms_excerpt(text: str) -> str:
+    """Return bounded *actual* Unpaid and Paid Services data-use statements.
+
+    Never substitute our assumptions for a missing policy paragraph. Exact
+    official document only: this function is called only for GOOGLE_DOCS
+    api_terms URL after content type/size validation.
+    """
+    lines = [x.strip() for x in text.splitlines() if x.strip()]
+    unpaid_start = next((i for i, x in enumerate(lines)
+                         if re.fullmatch(r"#{0,3}\s*Unpaid Services", x, re.I)), None)
+    paid_start = next((i for i, x in enumerate(lines)
+                       if re.fullmatch(r"#{0,3}\s*Paid Services", x, re.I)), None)
+    if unpaid_start is None or paid_start is None or paid_start <= unpaid_start:
+        return ""
+    def useful(section):
+        return [x for x in section if (
+            "when you use" in x.casefold()
+            or "human reviewers" in x.casefold()
+            or "do not submit" in x.casefold()
+            or "billing account" in x.casefold()
+            or "prompts" in x.casefold()
+            or "for paid services" in x.casefold()
+        )]
+    unpaid = useful(lines[unpaid_start + 1:paid_start])
+    paid = useful(lines[paid_start + 1:paid_start + 22])
+    if (not any("when you use unpaid services" in x.casefold() for x in unpaid)
+            or not any("doesn't use your prompts" in x.casefold() for x in paid)):
+        return ""
+    left = MAX_EXCERPT // 2
+    return ("Unpaid Services\n" + "\n".join(unpaid)[:left] +
+            "\n\nPaid Services\n" + "\n".join(paid)[:MAX_EXCERPT-left-32])[:MAX_EXCERPT]
+
+
 def select_relevant_excerpt(text: str, query: str) -> str:
     """Prefer exact named pricing sections, then generic topical excerpts."""
     targeted = _targeted_pricing_excerpt(text, query)
@@ -311,7 +356,10 @@ async def fetch_page_excerpt(
                         clean(line, 650) for line in raw.splitlines()
                         if clean(line, 650)
                     )
-                excerpt = select_relevant_excerpt(page_text, question)
+                if current == GOOGLE_DOCS["api_terms"][0]:
+                    excerpt = _privacy_terms_excerpt(page_text)
+                else:
+                    excerpt = select_relevant_excerpt(page_text, question)
                 if not excerpt:
                     log.info("Document excerpt no topical text host=%s",
                              urlsplit(current).hostname)
