@@ -8,6 +8,7 @@ Returned text is UNTRUSTED evidence, not a source of instructions.
 import asyncio
 import html
 import logging
+import os
 import re
 from html.parser import HTMLParser
 from urllib.parse import urlsplit, urljoin
@@ -596,7 +597,7 @@ async def enrich_with_read_excerpts(
     # public-search results may enter the bounded reader. Limit to three pages
     # across all methods, avoid adding domains as explicit allowlist entries.
     general_candidate_urls = set()
-    if not official_google and not identity_docs:
+    if os.environ.get("ENABLE_GENERAL_PUBLIC_READER", "0") == "1" and not official_google and not identity_docs:
         # Prefer independent hostnames: three W3C navigation pages should not
         # crowd out an MDN or GOV.UK result already found by public search.
         seen_hosts = {urlsplit(ref["url"]).hostname for ref in approved_candidates}
