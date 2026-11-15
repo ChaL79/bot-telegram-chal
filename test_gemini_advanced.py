@@ -32,6 +32,48 @@ class AdvancedTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("tools", seen[0][1])
         self.assertIn(RESEARCH_MODEL, seen[0][0])
 
+    async def test_503_preserves_sources_without_fake_ai_analysis_or_retry(self):
+        requests = []
+        def search_mock(req):
+            if req.url.host == "www.bing.com":
+                return httpx.Response(200, content=b"""<rss><channel><item>
+                <title>Python asyncio technical documentation</title>
+                <link>https://docs.python.org/3/library/asyncio-sync.html</link>
+                <description>Python asyncio synchronization</description>
+                </item></channel></rss>""")
+            if req.url.host == "docs.python.org":
+                return httpx.Response(200, headers={"Content-Type": "text/html"},
+                    content=b"""<html><main><h1>Python asyncio Semaphore</h1>
+                    <p>The Python asyncio Semaphore manages concurrent task access with a counter.</p>
+                    </main></html>""")
+            return httpx.Response(404)
+        def api_mock(req):
+            requests.append(req)
+            return httpx.Response(503, json={"error": {"message": "Upstream overloaded"}})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(search_mock)) as search:
+            async with httpx.AsyncClient(transport=httpx.MockTransport(api_mock)) as api:
+                answer, ok = await run_advanced(
+                    "Python asyncio Semaphore", "TEST_KEY", "deepdive",
+                    search_client=search, client=api)
+        self.assertFalse(ok)
+        self.assertEqual(len(requests), 1)
+        self.assertIn("HTTP 503", answer)
+        self.assertIn("BUKAN analisis Gemini", answer)
+        self.assertIn("docs.python.org", answer)
+        self.assertIn("Petikan halaman diambil", answer)
+        self.assertNotIn("Upstream overloaded", answer)
+
+    async def test_power_http_503_has_no_fake_sources(self):
+        calls = []
+        def mock(req):
+            calls.append(req)
+            return httpx.Response(503)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as api:
+            answer, ok = await run_advanced("Hi", "TEST_KEY", "power", client=api)
+        self.assertFalse(ok)
+        self.assertEqual(len(calls), 1)
+        self.assertNotIn("Petikan halaman", answer)
+
     async def test_power_uses_proven_flash_lite_no_thinking_high(self):
         seen = []
         def mock(req):
