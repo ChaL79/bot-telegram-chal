@@ -104,6 +104,13 @@ class SourceReaderTests(unittest.IsolatedAsyncioTestCase):
         refs3 = recommended_official_docs("Python asyncio rate limiting")
         self.assertIn(AIOLIMITER_DOCS, [item["url"] for item in refs3])
 
+    def test_aiolimiter_standalone_question_selects_docs(self):
+        from source_reader import AIOLIMITER_DOCS
+        question = "Deep dive verify whether aiolimiter's Leaky Bucket allows burst requests"
+        refs = recommended_official_docs(question)
+        self.assertEqual(len(refs), 1)
+        self.assertEqual(refs[0]["url"], AIOLIMITER_DOCS)
+
     def test_official_doc_selection_and_no_fabricated_page(self):
         self.assertEqual(recommended_official_docs("Python asyncio.Semaphore")[0]["url"], OFFICIAL_SEMAPHORE)
         self.assertEqual(recommended_official_docs("Weather tomorrow"), [])
