@@ -35,6 +35,19 @@ SCIENCE_TOPIC_WORDS = frozenset({
     "ocean", "warming", "glaciers", "glacier", "ice", "sheets", "melting",
     "climate", "temperature", "water",
 })
+
+# Organization-level search targeting (not fixed article URLs). These are
+# only READ-ONLY queries sent to the public RSS search provider.
+# A separate DNS-pinned reader must validate any retrieved article URL.
+ACCESSIBILITY_SOURCE_HOSTS = {
+    "w3c": "www.w3.org",
+    "mdn": "developer.mozilla.org",
+    "govuk": "www.gov.uk",
+}
+ACCESSIBILITY_TOPIC_WORDS = frozenset({
+    "wcag", "accessibility", "accessible", "keyboard", "focus",
+    "visibility", "visible", "obscured", "testing", "test",
+})
 WEB_HEADERS = {
     "User-Agent": "Mozilla/5.0 (compatible; ChaL79Bot/1.4; personal research)",
     "Accept": "application/rss+xml,application/xml,application/json,text/xml;q=0.8,*/*;q=0.1",
@@ -63,6 +76,8 @@ QUERY_FILLER = frozenset({
     "june", "july", "august", "september", "october", "december",
     "each", "across", "where", "include", "clearly", "explain",
     "without", "paid", "product", "products", "evidence", "actual",
+    "using", "answer", "questions", "organization", "organizations",
+    "website", "websites", "web", "docs", "guide", "guides",
 })
 
 
@@ -83,6 +98,8 @@ TOPIC_ANCHORS = frozenset({
     "noaa", "nasa", "ipcc", "sea", "level", "rise",
     "thermal", "expansion", "ocean", "glaciers", "glacier",
     "ice", "sheets", "melting", "climate",
+    "wcag", "accessibility", "keyboard", "focus", "visibility",
+    "obscured", "w3c", "mdn", "govuk",
 })
 IDENTITY_ANCHORS = frozenset({
     "passkeys", "passkey", "fido2", "totp", "mfa", "otp", "phishing",
@@ -336,6 +353,7 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
     terms = search_query_terms(query)
     if not terms:
         return []
+    query_text = query
     query = " ".join(terms)[:160]
 
     async def search(session: httpx.AsyncClient) -> list[dict]:
@@ -383,6 +401,42 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
             log.info("Official institution site discovery org=%s candidates=%d",
                      org, len(selected))
             return selected[:4]
+
+        # Bound extra discovery to explicitly requested organizations, without
+        # hardcoding any article URL or following search-result links here.
+        mentioned = query_text.casefold()
+        accessibility_orgs = [
+            name for name in ACCESSIBILITY_SOURCE_HOSTS
+            if (name in ("w3c", "mdn") and re.search(
+                r"\\b" + re.escape(name) + r"\\b", mentioned
+            ) or name == "govuk" and re.search(r"\\bgov\\.?\\s*uk\\b", mentioned))
+        ][:3]
+        accessibility_subject = [
+            word for word in terms if word in ACCESSIBILITY_TOPIC_WORDS
+        ][:5]
+        async def get_accessibility_site(org: str):
+            host = ACCESSIBILITY_SOURCE_HOSTS[org]
+            q = "site:" + host + " " + " ".join(
+                accessibility_subject or terms[:4]
+            )
+            resp = await session.get(
+                "https://www.bing.com/search",
+                params={"q": q, "format": "rss", "mkt": "en-US"},
+                timeout=7.0,
+            )
+            if resp.status_code != 200:
+                return []
+            found = parse_rss(resp.content, "Institution-scoped Bing RSS", 6)
+            result = [
+                item for item in found
+                if urlsplit(item["url"]).hostname == host and
+                not urlsplit(item["url"]).path.lower().endswith(
+                    (".pdf", ".xml", ".json")
+                )
+            ]
+            log.info("Accessibility institution discovery org=%s candidates=%d",
+                     org, len(result))
+            return result[:4]
 
         async def get_wikipedia():
             resp = await session.get(
@@ -450,6 +504,7 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
 
         providers = [get_bing(), get_wikipedia(), get_news()]
         providers.extend(get_official_site(org) for org in organizations)
+        providers.extend(get_accessibility_site(org) for org in accessibility_orgs)
         if tech:
             # Relevant community references are helpful for programming questions.
             # Not used as evidence of official API behavior.
@@ -470,11 +525,16 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
         ranked.sort(key=lambda pair: pair[0], reverse=True)
         # Prefer one strongly-relevant article from each requested institution,
         # instead of three near-duplicate pages from a single organization.
-        if len(organizations) >= 2:
+        if len(organizations) >= 2 or len(accessibility_orgs) >= 2:
             institutional, used_urls = [], set()
-            for org in organizations:
+            target_hosts = (
+                [OFFICIAL_SCIENCE_SITES[name] for name in organizations]
+                + [(ACCESSIBILITY_SOURCE_HOSTS[name],)
+                   for name in accessibility_orgs]
+            )
+            for hosts in target_hosts:
                 for _score, item in ranked:
-                    if (urlsplit(item["url"]).hostname in OFFICIAL_SCIENCE_SITES[org]
+                    if (urlsplit(item["url"]).hostname in hosts
                             and item["url"] not in used_urls):
                         institutional.append((_score, item))
                         used_urls.add(item["url"])
