@@ -111,6 +111,58 @@ class SourceReaderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(refs), 1)
         self.assertEqual(refs[0]["url"], AIOLIMITER_DOCS)
 
+    def test_curated_google_docs_selected_for_five_products(self):
+        from source_reader import google_official_docs, GOOGLE_DOCS
+        prompt = ("Deep dive compare Gemini AI Google AI Studio Google Antigravity "
+                  "NotebookLM Google Flow available in Brunei free pricing")
+        refs = google_official_docs(prompt)
+        self.assertEqual(len(refs), len(GOOGLE_DOCS))
+        self.assertTrue(all(x["provider"] == "Official Google documentation" for x in refs))
+        self.assertTrue(all(x["url"].startswith("https://") for x in refs))
+        self.assertEqual(google_official_docs("Python asyncio semaphore"), [])
+
+    def test_google_allowlist_blocks_arbitrary_urls_and_bypasses(self):
+        from source_reader import GOOGLE_DOCS
+        for url, _, _ in GOOGLE_DOCS.values():
+            self.assertTrue(is_approved_document_url(url))
+        for url in [
+            "https://support.google.com/gemini/answer/999999",
+            "https://support.google.com/gemini/answer/13575153?password=abc",
+            "https://support.google.com.evil.invalid/gemini/answer/13575153",
+            "https://ai.google.dev/gemini-api/docs/pricing/../../private",
+            "https://ai.google.dev:8443/gemini-api/docs/pricing",
+            "https://antigravity.google/secret", "https://blog.google/anything",
+            "https://evil.example/secret",
+        ]:
+            self.assertFalse(is_approved_document_url(url))
+
+    async def test_google_source_excerpts_are_read_and_preferred_over_irrelevant_metadata(self):
+        from source_reader import google_official_docs
+        hits = []
+        def mock(req):
+            hits.append(str(req.url))
+            return httpx.Response(200, headers={"content-type": "text/html"}, content=
+                b"<html><body><main><h1>Gemini Google AI Studio Antigravity NotebookLM Flow</h1>"
+                b"<p>Official Google product availability features and pricing information.</p>"
+                b"</main></body></html>")
+        meta = [{"provider": "News", "title": "Unrelated story", "url": "https://news.example/unrelated",
+                 "snippet": "Unrelated", "published": ""}]
+        prompt = "Compare Gemini AI Google AI Studio Google Antigravity NotebookLM Google Flow."
+        async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as client:
+            enriched = await enrich_with_read_excerpts(prompt, meta, client=client)
+        self.assertEqual(len(hits), 8)
+        self.assertEqual(len(enriched), 8)
+        self.assertTrue(all(x["read_status"] == "verified_page_excerpt" for x in enriched))
+        self.assertIn("Petikan halaman diambil", references_text(enriched))
+
+    async def test_blocked_google_docs_remain_unverified_not_fabricated(self):
+        from source_reader import GOOGLE_DOCS
+        async with httpx.AsyncClient(transport=httpx.MockTransport(
+            lambda req: httpx.Response(403)
+        )) as client:
+            sources = await enrich_with_read_excerpts("Google Flow", [], client=client)
+        self.assertEqual(sources, [])
+
     def test_official_doc_selection_and_no_fabricated_page(self):
         self.assertEqual(recommended_official_docs("Python asyncio.Semaphore")[0]["url"], OFFICIAL_SEMAPHORE)
         self.assertEqual(recommended_official_docs("Weather tomorrow"), [])
