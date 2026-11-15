@@ -1,7 +1,8 @@
 """Strictly bounded read-only source excerpts for /deepdive.
 
 Only pre-approved public documentation or Stack Overflow question pages can
-be fetched. Arbitrary result URLs are never requested. Redirects are disabled.
+be fetched. Arbitrary result URLs are never requested. Unapproved redirects
+are rejected, including redirects to private or unrelated destinations.
 Returned text is UNTRUSTED evidence, not a source of instructions.
 """
 import asyncio
@@ -26,7 +27,7 @@ OFFICIAL_ASYNCIO = "https://docs.python.org/3/library/asyncio.html"
 OFFICIAL_SEMAPHORE = "https://docs.python.org/3/library/asyncio-sync.html"
 AIOLIMITER_DOCS = "https://aiolimiter.readthedocs.io/en/stable/"
 
-# Official, public Google pages. Exact URLs only; no private account pages, redirects,
+# Official, public Google pages. Exact URLs only; no private account pages,
 # arbitrary paths, user-provided URLs, query parameters or automatic paid APIs.
 GOOGLE_DOCS = {
     "gemini_available": ("https://support.google.com/gemini/answer/13575153",
@@ -39,7 +40,7 @@ GOOGLE_DOCS = {
     "studio_free": ("https://aistudio.google.com/docs/pricing",
                     "Gemini API free and paid pricing",
                     "Gemini API Free Tier limited models paid pricing"),
-    "api_terms": ("https://ai.google.dev/gemini-api/terms",
+    "api_terms": ("https://aistudio.google.com/docs/terms",
                   "Gemini API Additional Terms - Unpaid and Paid data use",
                   "Gemini API Unpaid Services Paid Services privacy use human review"),
     "antigravity_guide": ("https://antigravity.google/docs/getting-started",
@@ -231,36 +232,54 @@ def _targeted_pricing_excerpt(text: str, question: str) -> str:
 
 
 def _privacy_terms_excerpt(text: str) -> str:
-    """Return bounded *actual* Unpaid and Paid Services data-use statements.
+    """Return only fetched Unpaid/Paid data-use clauses from Google's terms.
 
-    Never substitute our assumptions for a missing policy paragraph. Exact
-    official document only: this function is called only for GOOGLE_DOCS
-    api_terms URL after content type/size validation.
+    Accept browser/Markdown section headings with optional '#' and trailing
+    'link' UI text, but never fabricate any policy clause. A page that lacks
+    both actual data-use statements returns no verified evidence.
     """
     lines = [x.strip() for x in text.splitlines() if x.strip()]
+    heading = lambda label: re.compile(
+        r"^(?:#{1,6}\s*)?" + re.escape(label) + r"(?:\s+link)?\s*$",
+        re.I,
+    )
+    unpaid_heading = heading("Unpaid Services")
+    paid_heading = heading("Paid Services")
     unpaid_start = next((i for i, x in enumerate(lines)
-                         if re.fullmatch(r"#{0,3}\s*Unpaid Services", x, re.I)), None)
+                         if unpaid_heading.fullmatch(x)), None)
     paid_start = next((i for i, x in enumerate(lines)
-                       if re.fullmatch(r"#{0,3}\s*Paid Services", x, re.I)), None)
-    if unpaid_start is None or paid_start is None or paid_start <= unpaid_start:
+                       if paid_heading.fullmatch(x)
+                       and unpaid_start is not None and i > unpaid_start), None)
+    if unpaid_start is None or paid_start is None:
         return ""
-    def useful(section):
-        return [x for x in section if (
-            "when you use" in x.casefold()
-            or "human reviewers" in x.casefold()
-            or "do not submit" in x.casefold()
-            or "billing account" in x.casefold()
-            or "prompts" in x.casefold()
-            or "for paid services" in x.casefold()
-        )]
-    unpaid = useful(lines[unpaid_start + 1:paid_start])
-    paid = useful(lines[paid_start + 1:paid_start + 22])
+    # Respect the first section boundaries. Do not copy Grounding or unrelated
+    # clauses that follow Paid Services; no instructions from fetched text.
+    unpaid_lines = lines[unpaid_start + 1:paid_start]
+    paid_end = next((i for i in range(paid_start + 1, len(lines))
+                     if re.fullmatch(r"(?:#{1,6}\s*)?Payment Terms(?:\s+link)?", lines[i], re.I)), len(lines))
+    paid_lines = lines[paid_start + 1:paid_end]
+
+    def matches(lineset, anchors):
+        return [line for line in lineset
+                if any(a in line.casefold() for a in anchors)]
+
+    unpaid = matches(unpaid_lines, (
+        "when you use unpaid services", "human reviewers may",
+        "do not submit sensitive", "any services that are offered free",
+    ))
+    paid = matches(paid_lines, (
+        "when you use paid services", "google doesn't use your prompts",
+        "google does not use your prompts", "google logs prompts",
+        "your access to gemini api is a",
+    ))
     if (not any("when you use unpaid services" in x.casefold() for x in unpaid)
-            or not any("doesn't use your prompts" in x.casefold() for x in paid)):
+            or not any("human reviewers may" in x.casefold() for x in unpaid)
+            or not any(("doesn't use your prompts" in x.casefold()
+                        or "does not use your prompts" in x.casefold()) for x in paid)):
         return ""
     left = MAX_EXCERPT // 2
     return ("Unpaid Services\n" + "\n".join(unpaid)[:left] +
-            "\n\nPaid Services\n" + "\n".join(paid)[:MAX_EXCERPT-left-32])[:MAX_EXCERPT]
+            "\n\nPaid Services\n" + "\n".join(paid)[:MAX_EXCERPT - left - 32])[:MAX_EXCERPT]
 
 
 def select_relevant_excerpt(text: str, query: str) -> str:
