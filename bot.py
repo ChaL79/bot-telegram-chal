@@ -8,6 +8,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from gemini_extension import get_gemini_reply_result, MODEL_DEFAULT, is_authorized_owner
 from gemini_memory import read_history, record_exchange, clear_history
+from gemini_advanced import quota_reserve, run_advanced, split_telegram_text, MAX_INPUT_CHARS
 
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL")
@@ -239,6 +240,57 @@ async def gemini_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.reply_text(response[:4000])
 
 
+async def advanced_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Owner-only deep research or advanced analysis; explicit opt-in, zero auto-fallback."""
+    msg, user, chat = update.effective_message, update.effective_user, update.effective_chat
+    if not msg or not user or not chat:
+        return
+    if not is_authorized_owner(user.id, os.environ.get("GEMINI_OWNER_ID", ""), chat.type):
+        return
+    mode = (msg.text or "").split(maxsplit=1)[0].split("@")[0].lstrip("/").lower()
+    if mode not in ("power", "deepdive"):
+        return
+    question = " ".join(context.args or []).strip()
+    if not question:
+        await msg.reply_text(
+            "Contoh: /power Audit kod Python secara mendalam"
+            if mode == "power"
+            else "Contoh: /deepdive Semak perkembangan terkini, bandingkan 3 sumber rasmi"
+        )
+        return
+    if len(question) > MAX_INPUT_CHARS:
+        await msg.reply_text(f"Soalan terlalu panjang. Had maksimum {MAX_INPUT_CHARS} aksara.")
+        return
+    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        await msg.reply_text("Gemini API key tidak tersedia dalam Render.")
+        return
+    state = context.chat_data
+    lock = state.setdefault("_gemini_lock_v1", asyncio.Lock())
+    async with lock:
+        allowed, reason = quota_reserve(state, mode)
+        if not allowed:
+            await msg.reply_text(reason)
+            return
+        history = read_history(state)
+        await context.bot.send_chat_action(chat_id=chat.id, action="typing")
+        try:
+            answer, succeeded = await asyncio.wait_for(
+                run_advanced(question, api_key, mode, history=history), timeout=58,
+            )
+        except (asyncio.TimeoutError, ValueError):
+            answer, succeeded = "Penyelidikan terlalu lama atau input tidak sah.", False
+        except Exception:
+            log.exception("Advanced Gemini request failed")
+            answer, succeeded = "Mod Gemini tergendala; semak log Render.", False
+        if succeeded:
+            # Shared short-term memory across /gemini, /power, /deepdive.
+            # Keep source URLs only in Telegram reply; history still capped by gemini_memory.
+            record_exchange(state, question, answer)
+        for part in split_telegram_text(answer):
+            await msg.reply_text(part)
+
+
 async def resetmemory_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Owner can erase volatile Gemini history, within a private chat only."""
     msg, user, chat = update.effective_message, update.effective_user, update.effective_chat
@@ -322,6 +374,8 @@ def main():
     application.add_handler(CommandHandler("myid", myid))
     application.add_handler(CommandHandler("gemini", gemini_command))
     application.add_handler(CommandHandler("resetmemory", resetmemory_command))
+    application.add_handler(CommandHandler("power", advanced_command))
+    application.add_handler(CommandHandler("deepdive", advanced_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(MessageHandler(filters.VOICE, handle_voice))
     webhook_url = f"{RENDER_URL.rstrip('/')}/{TOKEN}"
