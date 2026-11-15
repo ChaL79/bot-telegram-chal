@@ -154,6 +154,15 @@ def source_relevance(item: dict, query_terms: list[str]) -> int:
     )}
     sought = [_canonical(x) for x in query_terms]
     matched = set(sought) & (title_terms | content_terms)
+    # A Gemini API privacy query must not be satisfied by generic Google
+    # search results or unrelated Gemini launches. Require privacy/data-use
+    # context as well as a named developer/API subject in the result itself.
+    privacy_terms = {"privacy", "confidential", "sensitive", "training", "data",
+                     "terms", "policy", "policies"}
+    if "gemini" in sought and "api" in sought and privacy_terms & set(sought):
+        found = title_terms | content_terms
+        if not ({"gemini", "api", "studio"} & found) or not (privacy_terms & found):
+            return 0
     # Named libraries/products are hard anchors: generic instructions such as
     # "verify" or "official" must never admit unrelated search results.
     hard_anchors = {"aiolimiter", "asyncio", "semaphore"}
