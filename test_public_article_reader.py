@@ -98,6 +98,20 @@ class PublicReaderSecurityTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(await read_public_html(url, client=cli), "")
             self.assertEqual(requests, [url])
 
+    async def test_general_reader_disabled_by_default(self):
+        from unittest.mock import patch
+        sources = [{"title": "WCAG 2.2 keyboard accessibility",
+                    "url": "https://www.w3.org/TR/WCAG22/",
+                    "provider": "Bing RSS", "snippet": "Keyboard focus",
+                    "published": ""}]
+        async with httpx.AsyncClient(transport=httpx.MockTransport(
+            lambda req: self.fail("Reader must not fetch with flag disabled")
+        )) as cli:
+            with patch.dict("os.environ", {}, clear=True):
+                result = await enrich_with_read_excerpts(
+                    "WCAG 2.2 keyboard focus", sources, client=cli)
+        self.assertEqual(result[0]["read_status"], "search_metadata_only")
+
     async def test_search_discovered_multi_domain_excerpts_without_allowlists(self):
         sources = [
             {"title":"WCAG 2.2 Focus Not Obscured","url":"https://www.w3.org/TR/WCAG22/",
@@ -114,7 +128,8 @@ class PublicReaderSecurityTests(unittest.IsolatedAsyncioTestCase):
                 b" Focus Not Obscured helps people navigate pages.</p></main></html>")
         question = "Compare WCAG 2.2 keyboard accessibility focus visibility testing"
         async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as client:
-            results = await enrich_with_read_excerpts(question, sources, client=client)
+            with patch.dict("os.environ", {"ENABLE_GENERAL_PUBLIC_READER": "1"}):
+                results = await enrich_with_read_excerpts(question, sources, client=client)
         self.assertEqual(len(requested), 2)
         self.assertEqual(len(results), 2)
         self.assertTrue(all(x["read_status"]=="verified_page_excerpt" for x in results))
@@ -139,9 +154,10 @@ class PublicReaderSecurityTests(unittest.IsolatedAsyncioTestCase):
                         b"<p>WCAG keyboard focus visibility and testing"
                         b" support accessible interfaces.</p></main></html>")
         async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as cli:
-            result = await enrich_with_read_excerpts(
-                "Compare WCAG keyboard focus visibility testing",
-                sources, client=cli)
+            with patch.dict("os.environ", {"ENABLE_GENERAL_PUBLIC_READER": "1"}):
+                result = await enrich_with_read_excerpts(
+                    "Compare WCAG keyboard focus visibility testing",
+                    sources, client=cli)
         self.assertEqual(len(visited), 3)
         self.assertEqual([httpx.URL(u).host for u in visited],
                          ["www.w3.org","developer.mozilla.org","www.gov.uk"])
