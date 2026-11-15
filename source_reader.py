@@ -169,8 +169,11 @@ class MainText(HTMLParser):
     SKIP = frozenset({"script", "style", "template", "noscript", "svg", "nav",
                       "footer", "header", "aside"})
 
-    def __init__(self):
+    def __init__(self, *, nist_article_container: bool = False):
         super().__init__(convert_charrefs=True)
+        # NIST SP 800-63B uses a unique <div class="container"> body
+        # instead of <main>/<article>. Apply only to this exact approved URL.
+        self.nist_article_container = nist_article_container
         self.depth = 0
         self.main_depth = None
         self.ignore_depth = None
@@ -186,7 +189,9 @@ class MainText(HTMLParser):
             css = (attr.get("class") or "").split()
             if (tag in ("main", "article") or attr.get("role") == "main"
                     or attr.get("id") == "question"
-                    or (tag == "div" and "body" in css)):
+                    or (tag == "div" and "body" in css)
+                    or (self.nist_article_container and tag == "div"
+                        and "container" in css)):
                 self.main_depth = self.depth
         if tag in self.BLOCKS and self.main_depth is not None and self.ignore_depth is None:
             self.fragments.append("\n")
@@ -389,7 +394,9 @@ async def fetch_page_excerpt(
                 # HTML pages must have an actual article/main region. A JS shell
                 # or generic login page must not count as document evidence.
                 if html_mime:
-                    parser = MainText()
+                    parser = MainText(
+                        nist_article_container=(current == IDENTITY_DOCS[0][0])
+                    )
                     parser.feed(raw)
                     page_text = parser.content()
                 else:
