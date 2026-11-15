@@ -19,11 +19,60 @@ log = logging.getLogger("source_reader")
 MAX_PAGE_BYTES = 450_000
 MAX_EXCERPT = 2400
 MAX_FETCHES = 3
+MAX_GOOGLE_FETCHES = 8  # fixed official documentation only, not general crawling
 FETCH_TIMEOUT = 7.0
 
 OFFICIAL_ASYNCIO = "https://docs.python.org/3/library/asyncio.html"
 OFFICIAL_SEMAPHORE = "https://docs.python.org/3/library/asyncio-sync.html"
 AIOLIMITER_DOCS = "https://aiolimiter.readthedocs.io/en/stable/"
+
+# Official, public Google pages. Exact URLs only; no private account pages, redirects,
+# arbitrary paths, user-provided URLs, query parameters or automatic paid APIs.
+GOOGLE_DOCS = {
+    "gemini_available": ("https://support.google.com/gemini/answer/13575153",
+                         "Gemini Apps supported countries", "Gemini web app supported countries Brunei"),
+    "studio_start": ("https://ai.google.dev/gemini-api/docs/ai-studio-quickstart",
+                     "Google AI Studio quickstart", "Google AI Studio prompt API models build"),
+    "studio_free": ("https://ai.google.dev/gemini-api/docs/pricing",
+                    "Gemini API free and paid pricing", "Gemini API Free Tier limited models paid pricing"),
+    "antigravity_guide": ("https://antigravity.google/docs/getting-started",
+                          "Google Antigravity getting started", "Antigravity coding agents IDE CLI"),
+    "antigravity_free": ("https://antigravity.google/pricing",
+                         "Google Antigravity individual pricing", "Antigravity free individual plan rate limits"),
+    "notebook_rename": ("https://blog.google/innovation-and-ai/products/gemini-notebook/notebooklm-gemini-notebook/",
+                        "Google NotebookLM renamed Gemini Notebook", "NotebookLM Gemini Notebook rename research"),
+    "flow_start": ("https://support.google.com/flow/answer/16353333",
+                   "Google Flow features and subscription requirements", "Google Flow video free daily credits"),
+    "flow_available": ("https://support.google.com/flow/answer/16353544",
+                       "Google Flow supported countries", "Google Flow countries Brunei availability"),
+}
+GOOGLE_ALLOWED_URLS = frozenset(item[0] for item in GOOGLE_DOCS.values())
+
+
+def google_official_docs(question: str) -> list[dict]:
+    """Select relevant exact official Google sources by product name, not guessed URLs."""
+    q = question.casefold()
+    google_context = any(x in q for x in ("google", "gemini", "antigravity", "notebooklm"))
+    if not google_context:
+        return []
+    requested = []
+    if "gemini" in q or "google ai" in q:
+        requested.append("gemini_available")
+    if "ai studio" in q or "aistudio" in q:
+        requested.extend(["studio_start", "studio_free"])
+    if "antigravity" in q:
+        requested.extend(["antigravity_guide", "antigravity_free"])
+    if "notebooklm" in q or "notebook lm" in q or "gemini notebook" in q:
+        requested.append("notebook_rename")
+    if re.search(r"\bflow\b", q):
+        requested.extend(["flow_start", "flow_available"])
+    result = []
+    for k in dict.fromkeys(requested):
+        url, title, focus = GOOGLE_DOCS[k]
+        result.append({"provider": "Official Google documentation", "title": title,
+                       "url": url, "snippet": "", "published": "", "focus": focus})
+    return result
+
 
 
 def is_approved_document_url(url: str) -> bool:
@@ -35,6 +84,10 @@ def is_approved_document_url(url: str) -> bool:
         if p.scheme != "https" or p.port not in (None, 443) or p.username or p.password:
             return False
         host, path = p.hostname or "", p.path
+        if url in GOOGLE_ALLOWED_URLS:
+            return True
+        if host in ("support.google.com", "ai.google.dev", "antigravity.google", "blog.google"):
+            return False
         if host == "docs.python.org":
             return bool(re.fullmatch(r"/3(?:\.\d+)?/(?:library/[a-z0-9_.-]+\.html)?", path))
         if host == "stackoverflow.com":
@@ -190,24 +243,26 @@ async def enrich_with_read_excerpts(
     question: str, sources: list[dict], *,
     client: Optional[httpx.AsyncClient] = None
 ) -> list[dict]:
-    """Read at most three pre-approved source pages; all other hits remain metadata.
+    """Read at most three source pages normally, or eight curated Google pages.
 
     An official reference is only added if its page actually returns a relevant
     excerpt. Never label unvisited links as read.
     """
     approved_candidates = []
     seen = set()
-    for ref in recommended_official_docs(question) + sources:
+    official_google = google_official_docs(question)
+    capacity = MAX_GOOGLE_FETCHES if len(official_google) >= 3 else MAX_FETCHES
+    for ref in recommended_official_docs(question) + official_google + sources:
         url = ref.get("url", "")
         if url in seen or not is_approved_document_url(url):
             continue
         seen.add(url)
         approved_candidates.append(ref)
-        if len(approved_candidates) >= MAX_FETCHES:
+        if len(approved_candidates) >= capacity:
             break
 
     async def load(ref):
-        excerpt = await fetch_page_excerpt(ref["url"], question, client=client)
+        excerpt = await fetch_page_excerpt(ref["url"], ref.get("focus", question), client=client)
         if not excerpt:
             return None
         return {**ref, "excerpt": excerpt, "read_status": "verified_page_excerpt"}
