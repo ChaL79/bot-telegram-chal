@@ -258,7 +258,7 @@ async def fetch_page_excerpt(
                     ):
                         log.info("Document excerpt rejected low-content text host=%s", host)
                         return ""
-                    page_text = "\\n".join(
+                    page_text = "\n".join(
                         clean(line, 650) for line in raw.splitlines()
                         if clean(line, 650)
                     )
