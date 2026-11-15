@@ -120,6 +120,28 @@ class FreeResearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(search_query_terms(query), ["python", "asyncio", "rate", "limiting"])
         self.assertEqual(search_query_terms("/deepdive Cari Python asyncio rate limiting"), ["python", "asyncio", "rate", "limiting"])
 
+    def test_long_multisource_question_finds_security_subject_not_conduct(self):
+        q = ("Conduct independent, multi-source cybersecurity research as of 15 November 2026. "
+             "Compare three account authentication methods: FIDO2 passkeys, authenticator-app "
+             "TOTP codes, and SMS one-time passwords. Research official publications from "
+             "NIST, CISA and FIDO Alliance.")
+        terms = search_query_terms(q)
+        self.assertIn("fido2", terms)
+        self.assertIn("passkeys", terms)
+        self.assertIn("totp", terms)
+        self.assertIn("sms", terms)
+        self.assertNotIn("conduct", terms)
+        self.assertNotIn("2026", terms)
+        for title in ["Timeline of the Russo-Ukrainian war", "2025-2026 Iranian protests",
+                      "conduct - English dictionary"]:
+            self.assertEqual(source_relevance(
+                {"title":title, "url":"https://en.wikipedia.org/wiki/Conduct",
+                 "snippet":title}, terms), 0)
+        self.assertGreater(source_relevance(
+            {"title":"FIDO2 passkeys resist phishing attacks",
+             "url":"https://fidoalliance.org/passkeys-2/",
+             "snippet":"Passkeys based on FIDO2 authenticator security"}, terms), 0)
+
     def test_gemini_api_privacy_excludes_generic_google_and_launch_news(self):
         terms = search_query_terms(
             "Research Google Gemini API Free Tier privacy data use and training")

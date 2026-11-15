@@ -27,6 +27,33 @@ OFFICIAL_ASYNCIO = "https://docs.python.org/3/library/asyncio.html"
 OFFICIAL_SEMAPHORE = "https://docs.python.org/3/library/asyncio-sync.html"
 AIOLIMITER_DOCS = "https://aiolimiter.readthedocs.io/en/stable/"
 
+# Fixed public pages for authentication security research. Do not discover
+# arbitrary links from untrusted RSS metadata or permit cross-host redirects.
+IDENTITY_DOCS = (
+    ("https://pages.nist.gov/800-63-4/sp800-63b/authenticators/",
+     "NIST SP 800-63B: Authenticator and Verifier Requirements",
+     "NIST phishing resistance OTP authenticator cryptographic passkeys"),
+    ("https://fidoalliance.org/passkeys-2/",
+     "FIDO Alliance: Passkeys",
+     "FIDO Alliance passkeys FIDO2 phishing-resistant public key authentication"),
+    ("https://www.cisa.gov/MFA",
+     "CISA: Multi-Factor Authentication",
+     "CISA phishing resistant MFA SMS TOTP SIM swapping"),
+)
+IDENTITY_ALLOWED_URLS = frozenset(x[0] for x in IDENTITY_DOCS)
+
+
+def identity_official_docs(question: str) -> list[dict]:
+    words = set(search_query_terms(question))
+    if not words.intersection({"passkeys", "passkey", "fido2", "totp",
+                               "mfa", "phishing", "webauthn", "authenticator"}):
+        return []
+    return [
+        {"provider": "Official authentication security guidance", "title": title,
+         "url": url, "snippet": "", "published": "", "focus": focus}
+        for url, title, focus in IDENTITY_DOCS
+    ]
+
 # Official, public Google pages. Exact URLs only; no private account pages,
 # arbitrary paths, user-provided URLs, query parameters or automatic paid APIs.
 GOOGLE_DOCS = {
@@ -110,7 +137,7 @@ def is_approved_document_url(url: str) -> bool:
         if p.scheme != "https" or p.port not in (None, 443) or p.username or p.password:
             return False
         host, path = p.hostname or "", p.path
-        if url in GOOGLE_ALLOWED_URLS:
+        if url in GOOGLE_ALLOWED_URLS or url in IDENTITY_ALLOWED_URLS:
             return True
         # Some Google developer docs canonicalize to an explicit English locale.
         # Allow only that locale on an exactly approved ai.google.dev path.
@@ -437,8 +464,9 @@ async def enrich_with_read_excerpts(
     approved_candidates = []
     seen = set()
     official_google = google_official_docs(question)
+    identity_docs = identity_official_docs(question)
     capacity = MAX_GOOGLE_FETCHES if len(official_google) >= 3 else MAX_FETCHES
-    for ref in recommended_official_docs(question) + official_google + sources:
+    for ref in recommended_official_docs(question) + official_google + identity_docs + sources:
         url = ref.get("url", "")
         if url in seen or not is_approved_document_url(url):
             continue

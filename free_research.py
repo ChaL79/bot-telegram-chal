@@ -39,6 +39,13 @@ QUERY_FILLER = frozenset({
     "identify", "include", "documented", "documentation", "assumptions",
     "assumption", "actual", "read", "reading", "pages", "page", "provide",
     "specifically", "specific", "exactly", "exact", "particular", "separately",
+    "conduct", "independent", "multi", "source", "research", "review", "studies",
+    "publications", "publication", "methods", "method", "three", "account",
+    "as", "at", "of", "my", "its", "vs", "is", "on", "for", "which",
+    "november", "january", "february", "march", "april", "may",
+    "june", "july", "august", "september", "october", "december",
+    "each", "across", "where", "include", "clearly", "explain",
+    "without", "paid", "product", "products", "evidence", "actual",
 })
 
 
@@ -47,20 +54,44 @@ def _terms(value: str) -> list[str]:
             if word not in QUERY_FILLER and len(word) > 1]
 
 
-def search_query_terms(request: str) -> list[str]:
-    """Deterministically extract topic keywords; no model call or web request."""
-    request = clean(request, 480)
-    request = re.sub(r"^/(?:deepdive|power)\b\s*", "", request, flags=re.I)
-    # Keep only the primary question; trailing sentences are answer-format instructions.
-    request = re.split(r"[!?\.]\s+(?=[^\s])", request, maxsplit=1)[0]
-    unique = []
-    for word in _terms(request):
-        if word not in unique:
-            unique.append(word)
-        if len(unique) >= 12:
-            break
-    return unique
+# Prefer named topical concepts, even if the user includes a long introductory
+# sentence or multi-step instruction list before naming the real topic. This
+# avoids accidental searches for words like "conduct", "independent", or dates.
+TOPIC_ANCHORS = frozenset({
+    "aiolimiter", "asyncio", "semaphore", "python", "javascript", "kubernetes",
+    "gemini", "aistudio", "antigravity", "notebooklm", "groq", "openrouter",
+    "passkeys", "passkey", "fido2", "totp", "mfa", "otp", "phishing",
+    "authenticator", "authentication", "webauthn", "cybersecurity",
+    "nist", "cisa", "fido", "sms", "sim", "swapping",
+})
+IDENTITY_ANCHORS = frozenset({
+    "passkeys", "passkey", "fido2", "totp", "mfa", "otp", "phishing",
+    "authenticator", "webauthn", "sms",
+})
 
+
+def search_query_terms(request: str) -> list[str]:
+    """Extract relevant terms across a complete question; no LLM, no extra API."""
+    request = clean(request, 2800)
+    request = re.sub(r"^/(?:deepdive|power)\b\s*", "", request, flags=re.I)
+    words = [x for x in _terms(request) if not x.isdecimal()]
+    anchors = []
+    for word in words:
+        if word in TOPIC_ANCHORS and word not in anchors:
+            anchors.append(word)
+    # When researching authentication, generic words like "api", "bot",
+    # "telegram", "free" are context only, not the topic of a web search.
+    if IDENTITY_ANCHORS.intersection(anchors):
+        selected = [x for x in anchors if x in IDENTITY_ANCHORS]
+        selected += [x for x in anchors if x in {"nist", "cisa", "fido", "authentication", "cybersecurity"}]
+    else:
+        selected = anchors[:]
+    for word in words:
+        if word not in selected and word not in QUERY_FILLER:
+            selected.append(word)
+        if len(selected) >= 12:
+            break
+    return selected[:12]
 
 
 TECH_KEYWORDS = frozenset({
@@ -69,6 +100,8 @@ TECH_KEYWORDS = frozenset({
     "security", "cybersecurity", "linux", "regex", "sql", "algorithm",
     "rate", "limiting", "limiter", "limit", "semaphore", "token", "telegram", "bot", "llm",
     "aiolimiter", "async", "leaky", "bucket", "sliding", "window", "burst", "throttle", "throttling",
+    "passkeys", "passkey", "fido2", "totp", "mfa", "otp", "phishing",
+    "authenticator", "authentication", "webauthn", "cybersecurity",
 })
 
 
@@ -167,6 +200,12 @@ def source_relevance(item: dict, query_terms: list[str]) -> int:
     # "verify" or "official" must never admit unrelated search results.
     hard_anchors = {"aiolimiter", "asyncio", "semaphore"}
     required = set(sought) & hard_anchors
+    # Technical identity questions must mention a real authentication
+    # concept rather than just generic login/account words in a snippet.
+    if IDENTITY_ANCHORS.intersection(sought):
+        named = IDENTITY_ANCHORS | {"authentication", "fido"}
+        if not (named & (title_terms | content_terms)):
+            return 0
     if required and not (required & matched):
         return 0
     minimum = 2 if len(set(sought)) >= 3 else len(set(sought))
