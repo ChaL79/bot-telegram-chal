@@ -148,7 +148,9 @@ def is_approved_document_url(url: str) -> bool:
         # Reject credentials, ports, query strings, fragments, IPs and file
         # downloads. This does not expand to entire .gov or .org domains.
         if host in OFFICIAL_SCIENCE_HOSTS:
-            if p.query or p.fragment or not path.startswith("/"):
+            if (p.query or p.fragment or not path.startswith("/")
+                    or path.count("/") < 2 or "%" in path
+                    or "//" in path or "/.." in path):
                 return False
             if any(x in path.lower() for x in ("/login", "/signin", "/account",
                                                  "/admin", "/api/", "/wp-json/",
