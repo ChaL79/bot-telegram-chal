@@ -116,10 +116,21 @@ class SourceReaderTests(unittest.IsolatedAsyncioTestCase):
         prompt = ("Deep dive compare Gemini AI Google AI Studio Google Antigravity "
                   "NotebookLM Google Flow available in Brunei free pricing")
         refs = google_official_docs(prompt)
-        self.assertEqual(len(refs), len(GOOGLE_DOCS))
+        self.assertEqual(len(refs), len(GOOGLE_DOCS) - 1)  # omit generic Gemini overview for comparison
         self.assertTrue(all(x["provider"] == "Official Google documentation" for x in refs))
         self.assertTrue(all(x["url"].startswith("https://") for x in refs))
         self.assertEqual(google_official_docs("Python asyncio semaphore"), [])
+
+    def test_studio_and_flow_query_uses_specific_docs_not_consumer_gemini(self):
+        from source_reader import google_official_docs, GOOGLE_DOCS
+        refs = google_official_docs("Research Google AI Studio and Google Flow in Brunei")
+        urls = [x["url"] for x in refs]
+        self.assertEqual(len(urls), 4)
+        self.assertIn(GOOGLE_DOCS["studio_start"][0], urls)
+        self.assertIn(GOOGLE_DOCS["studio_free"][0], urls)
+        self.assertIn(GOOGLE_DOCS["flow_intro"][0], urls)
+        self.assertIn(GOOGLE_DOCS["flow_available"][0], urls)
+        self.assertNotIn(GOOGLE_DOCS["gemini_overview"][0], urls)
 
     def test_google_allowlist_blocks_arbitrary_urls_and_bypasses(self):
         from source_reader import GOOGLE_DOCS
@@ -150,15 +161,15 @@ class SourceReaderTests(unittest.IsolatedAsyncioTestCase):
         prompt = "Compare Gemini AI Google AI Studio Google Antigravity NotebookLM Google Flow."
         async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as client:
             enriched = await enrich_with_read_excerpts(prompt, meta, client=client)
-        self.assertEqual(len(hits), 9)
+        self.assertEqual(len(hits), 8)  # generic Gemini overview skipped in comparison
         self.assertEqual(len(enriched), 8)
         self.assertTrue(all(x["read_status"] == "verified_page_excerpt" for x in enriched))
         self.assertIn("Petikan halaman diambil", references_text(enriched))
 
-    async def test_one_hop_approved_google_locale_redirect(self):
+    async def test_one_hop_approved_canonical_google_redirect(self):
         from source_reader import GOOGLE_DOCS
-        url = GOOGLE_DOCS["studio_free"][0]
-        target = url + "?hl=en"
+        url = GOOGLE_DOCS["studio_start"][0]
+        target = GOOGLE_DOCS["studio_free"][0]
         urls = []
         def mock(req):
             urls.append(str(req.url))
@@ -193,7 +204,7 @@ class SourceReaderTests(unittest.IsolatedAsyncioTestCase):
         urls=[]
         def mock(req):
             urls.append(str(req.url))
-            return httpx.Response(301,headers={"location":url+"?hl=en"})
+            return httpx.Response(301,headers={"location":GOOGLE_DOCS["studio_start"][0]})
         async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as cli:
             self.assertEqual(await fetch_page_excerpt(url,"Gemini API pricing",client=cli),"")
         self.assertEqual(len(urls), 2)
