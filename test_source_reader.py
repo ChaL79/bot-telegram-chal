@@ -603,7 +603,7 @@ No content on data practices.
         <p>Non-exportable authentication keys are considered more secure, and
         non-exportable cryptographic keys are required at AAL3. The authentication
         keys on syncable authenticators are inherently exportable.</p>
-        </div></html>"""
+        </div></html>""".replace(b"\n", b" ")
         def mocked(req):
             requested.append(str(req.url))
             if str(req.url) == IDENTITY_DOCS[0][0]:
