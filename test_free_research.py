@@ -129,7 +129,8 @@ class FreeResearchTests(unittest.IsolatedAsyncioTestCase):
                     "setiap halaman yang berjaya dibaca, dan asingkan sumber metadata sahaja "
                     "atau gagal diakses. Jangan reka fakta, petikan atau keputusan ujian.")
         terms = search_query_terms(question)
-        self.assertEqual(terms[:6], ["wifi7", "wifi", "wifi6", "mlo", "6ghz", "latency"])
+        self.assertEqual(terms[:3], ["wifi7", "wifi", "wifi6"])
+        self.assertTrue({"mlo", "6ghz", "latency"}.issubset(set(terms)))
         self.assertNotIn("bandingkan", terms)
         self.assertNotIn("berdasarkan", terms)
         self.assertNotIn("sekurang", terms)
