@@ -129,6 +129,30 @@ def _verified_history(history: Optional[list]) -> list[dict]:
     return out
 
 
+def research_fallback(sources: list[dict], reason: str) -> str:
+    """Expose previously obtained sources if text generation is unavailable.
+
+    This is deterministic raw evidence, NOT an AI-generated research conclusion.
+    Only fetched excerpts may be quoted as read; search metadata is not proof.
+    """
+    lines = [
+        "⚠️ Gemini tidak dapat menghasilkan analisis sekarang (" + reason + ").",
+        "Carian sumber telah dibuat, tetapi jawapan berikut BUKAN analisis Gemini.",
+        "Sumber yang diperoleh (petikan/metadata, bukan semakan artikel penuh):",
+    ]
+    for i, source in enumerate(sources[:5], 1):
+        title = str(source.get("title", ""))[:100]
+        url = str(source.get("url", ""))
+        if source.get("read_status") == "verified_page_excerpt" and source.get("excerpt"):
+            excerpt = " ".join(str(source["excerpt"]).split())[:550]
+            label = "Petikan halaman diambil"
+            lines.append(f"[{i}] {title} [{label}]\n{url}\nPetikan: {excerpt}")
+        else:
+            lines.append(f"[{i}] {title} [Metadata carian sahaja]\n{url}")
+    lines.append("Sila semak sumber secara langsung; cuba /deepdive semula apabila Gemini tersedia.")
+    return "\n\n".join(lines)[:7600]
+
+
 async def run_advanced(
     question: str,
     api_key: str,
@@ -196,6 +220,8 @@ async def run_advanced(
             )
         except (httpx.TimeoutException, httpx.RequestError):
             log.warning("Advanced Gemini %s network or timeout failure", mode)
+            if research and sources:
+                return research_fallback(sources, "rangkaian atau masa tamat"), False
             return "Gemini lambat atau tidak dapat dihubungi. Cuba soalan lebih ringkas.", False
         if response.status_code == 429:
             return "Kuota Free Tier Gemini sudah dicapai. Cuba lagi selepas reset.", False
@@ -206,6 +232,8 @@ async def run_advanced(
             return "Model Gemini tidak tersedia melalui API projek ini.", False
         if response.status_code != 200:
             log.warning("Gemini advanced %s HTTP %s", mode, response.status_code)
+            if research and sources and response.status_code in (500, 502, 503, 504):
+                return research_fallback(sources, f"HTTP {response.status_code}"), False
             return "Gemini tidak dapat menjawab sekarang.", False
         try:
             data = response.json()

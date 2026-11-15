@@ -159,19 +159,23 @@ async def fetch_page_excerpt(
 
 
 def recommended_official_docs(question: str) -> list[dict]:
+    """Select relevant allowlisted docs by named topic, not generic phrasing.
+
+    A standalone aiolimiter query MUST select the aiolimiter docs, without
+    requiring Python/asyncio to be mentioned explicitly.
+    """
     terms = set(search_query_terms(question))
-    if "python" not in terms and "asyncio" not in terms:
-        return []
-    if "semaphore" in terms or "synchronization" in terms:
-        url, title = OFFICIAL_SEMAPHORE, "asyncio synchronization primitives (Python docs)"
-    elif "asyncio" in terms:
-        url, title = OFFICIAL_ASYNCIO, "asyncio (Python official docs)"
-    else:
-        return []
-    refs = [{"provider": "Official Python documentation", "title": title,
-             "url": url, "snippet": "", "published": ""}]
-    # A directly requested library must be looked up even if the user's wording
-    # does not include generic rate-limiting vocabulary.
+    refs = []
+    if "python" in terms or "asyncio" in terms or "semaphore" in terms:
+        if "semaphore" in terms or "synchronization" in terms:
+            url, title = OFFICIAL_SEMAPHORE, "asyncio synchronization primitives (Python docs)"
+        elif "asyncio" in terms:
+            url, title = OFFICIAL_ASYNCIO, "asyncio (Python official docs)"
+        else:
+            url, title = None, None
+        if url:
+            refs.append({"provider": "Official Python documentation", "title": title,
+                         "url": url, "snippet": "", "published": ""})
     if "aiolimiter" in terms or ("asyncio" in terms and (
         "rate" in terms or "limiting" in terms or "limiter" in terms
         or ("leaky" in terms and "bucket" in terms)

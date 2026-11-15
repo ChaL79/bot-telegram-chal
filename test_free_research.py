@@ -108,6 +108,13 @@ class FreeResearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(items), 2)
         self.assertTrue(all("asyncio" in x["title"].lower() for x in items))
 
+    def test_aiolimiter_classified_as_technical(self):
+        from free_research import technical_topic
+        terms = search_query_terms(
+            "Deep dive research whether aiolimiter's Leaky Bucket allows burst requests")
+        self.assertIn("aiolimiter", terms)
+        self.assertTrue(technical_topic(terms))
+
     def test_extract_technical_topic_ignores_malay_command_words(self):
         query = "Cari sumber tentang Python asyncio rate limiting. Ringkaskan dapatan, bezakan fakta dan andaian dan sertakan pautan."
         self.assertEqual(search_query_terms(query), ["python", "asyncio", "rate", "limiting"])
