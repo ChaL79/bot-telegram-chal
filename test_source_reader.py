@@ -415,6 +415,52 @@ For Paid Services Google logs prompts for a limited time for abuse prevention.
             none = await enrich_with_read_excerpts("Gemini API Free Tier privacy",[],client=client)
         self.assertEqual(none, [])
 
+    def test_privacy_terms_accepts_canonical_markdown_headings(self):
+        from source_reader import _privacy_terms_excerpt
+        text = """# Gemini API Additional Terms of Service
+## Unpaid Services   link
+Any Services that are offered free of charge like direct interactions with Google AI Studio are Unpaid Services.
+### How Google Uses Your Data   link
+When you use Unpaid Services, including unpaid quota on Gemini API, Google uses the content you submit and generated responses to improve products.
+To help with quality, human reviewers may read, annotate, and process your API input and output.
+Do not submit sensitive, confidential, or personal information to the Unpaid Services.
+## Paid Services   link
+### How Google Uses Your Data   link
+When you use Paid Services, Google doesn't use your prompts or responses to improve our products.
+For Paid Services Google logs prompts and responses for a limited period.
+## Payment Terms
+"""
+        excerpt = _privacy_terms_excerpt(text)
+        self.assertIn("When you use Unpaid Services", excerpt)
+        self.assertIn("human reviewers may", excerpt)
+        self.assertIn("doesn't use your prompts", excerpt)
+        self.assertNotIn("Payment Terms", excerpt)
+        self.assertNotIn("Age Requirements", excerpt)
+
+    def test_privacy_terms_requires_real_unpaid_and_paid_evidence(self):
+        from source_reader import _privacy_terms_excerpt
+        spoof = """## Unpaid Services   link
+No content on data practices.
+## Paid Services   link
+No content on data practices.
+"""
+        self.assertEqual(_privacy_terms_excerpt(spoof), "")
+
+    def test_canonical_gemini_terms_allowlisted_no_arbitrary_google_docs(self):
+        from source_reader import GOOGLE_DOCS, google_official_docs
+        policy = GOOGLE_DOCS["api_terms"][0]
+        self.assertEqual(policy, "https://aistudio.google.com/docs/terms")
+        self.assertTrue(is_approved_document_url(policy))
+        self.assertFalse(is_approved_document_url(
+            "https://ai.google.dev/gemini-api/terms"))
+        self.assertFalse(is_approved_document_url(
+            "https://aistudio.google.com/docs/terms?redirect=evil"))
+        self.assertFalse(is_approved_document_url(
+            "https://aistudio.google.com/docs/internal"))
+        refs = google_official_docs(
+            "Compare Gemini API privacy, human reviewers, Unpaid Services and Paid Services")
+        self.assertEqual(refs[0]["url"], policy)
+
     def test_official_doc_selection_and_no_fabricated_page(self):
         self.assertEqual(recommended_official_docs("Python asyncio.Semaphore")[0]["url"], OFFICIAL_SEMAPHORE)
         self.assertEqual(recommended_official_docs("Weather tomorrow"), [])
