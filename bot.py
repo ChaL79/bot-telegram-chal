@@ -6,7 +6,8 @@ import httpx
 from pydub import AudioSegment
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-from gemini_extension import get_gemini_reply, MODEL_DEFAULT, is_authorized_owner
+from gemini_extension import get_gemini_reply_result, MODEL_DEFAULT, is_authorized_owner
+from gemini_memory import read_history, record_exchange, clear_history
 
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL")
@@ -191,13 +192,14 @@ async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def gemini_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """A direct opt-in Gemini command; rejects non-owner and group chats."""
+    """Owner-only Gemini chat; serialize per-chat messages to preserve order."""
     msg = update.effective_message
     user = update.effective_user
-    if not msg or not user:
+    chat = update.effective_chat
+    if not msg or not user or not chat:
         return
     owner_id = os.environ.get("GEMINI_OWNER_ID", "").strip()
-    if not is_authorized_owner(user.id, owner_id, getattr(update.effective_chat, "type", None)):
+    if not is_authorized_owner(user.id, owner_id, chat.type):
         return
     api_key = os.environ.get("GEMINI_API_KEY", "").strip()
     if not api_key:
@@ -205,20 +207,50 @@ async def gemini_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     question = " ".join(context.args or []).strip()
     if not question:
-        await msg.reply_text("Contoh: /gemini Terangkan market regime XAUUSD")
+        await msg.reply_text("Contoh: /gemini Apakah perkataan yang saya berikan tadi?")
         return
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-    try:
-        response = await asyncio.wait_for(
-            get_gemini_reply(question, api_key, os.environ.get("GEMINI_MODEL", MODEL_DEFAULT)),
-            timeout=25,
-        )
-    except (asyncio.TimeoutError, ValueError):
-        response = "Gemini gagal atau tamat masa. Semak model dan cuba lagi."
-    except Exception:
-        log.exception("Gemini handler failure")
-        response = "Ralat Gemini. Sila cuba lagi."
-    await msg.reply_text(response[:4000])
+    if len(question) > 3500:
+        await msg.reply_text("Soalan terlalu panjang. Had maksimum ialah 3,500 aksara.")
+        return
+    # PTB chat_data lives only in this process (no PicklePersistence).
+    # A lock guards history when concurrent_updates is enabled in future.
+    state = context.chat_data
+    lock = state.setdefault("_gemini_lock_v1", asyncio.Lock())
+    async with lock:
+        history = read_history(state)
+        await context.bot.send_chat_action(chat_id=chat.id, action="typing")
+        try:
+            response, ok = await asyncio.wait_for(
+                get_gemini_reply_result(
+                    question, api_key,
+                    os.environ.get("GEMINI_MODEL", MODEL_DEFAULT),
+                    history=history,
+                ),
+                timeout=25,
+            )
+        except (asyncio.TimeoutError, ValueError):
+            response, ok = "Gemini gagal atau tamat masa. Semak model dan cuba lagi.", False
+        except Exception:
+            log.exception("Gemini handler failure")
+            response, ok = "Ralat Gemini. Sila cuba lagi.", False
+        if ok:
+            # Save only successful exchanges, no token/API key retained.
+            record_exchange(state, question, response)
+        await msg.reply_text(response[:4000])
+
+
+async def resetmemory_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Owner can erase volatile Gemini history, within a private chat only."""
+    msg, user, chat = update.effective_message, update.effective_user, update.effective_chat
+    if not msg or not user or not chat:
+        return
+    if not is_authorized_owner(user.id, os.environ.get("GEMINI_OWNER_ID", ""), chat.type):
+        return
+    state = context.chat_data
+    lock = state.setdefault("_gemini_lock_v1", asyncio.Lock())
+    async with lock:
+        clear_history(state)
+        await msg.reply_text("Memori sementara Gemini telah dikosongkan.")
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -289,6 +321,7 @@ def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("myid", myid))
     application.add_handler(CommandHandler("gemini", gemini_command))
+    application.add_handler(CommandHandler("resetmemory", resetmemory_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(MessageHandler(filters.VOICE, handle_voice))
     webhook_url = f"{RENDER_URL.rstrip('/')}/{TOKEN}"
