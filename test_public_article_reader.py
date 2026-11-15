@@ -3,7 +3,7 @@ import httpx
 from unittest.mock import AsyncMock, patch
 
 from public_article_reader import (
-    safe_public_article_url, resolve_public_ip, read_public_html,
+    safe_public_article_url, resolve_public_ip, read_public_html, PublicIPBackend,
 )
 from source_reader import enrich_with_read_excerpts
 
@@ -56,6 +56,28 @@ class PublicReaderSecurityTests(unittest.IsolatedAsyncioTestCase):
         with patch("asyncio.BaseEventLoop.getaddrinfo", new=only_public):
             self.assertEqual(await resolve_public_ip("example.org"),
                              "93.184.215.14")
+
+    async def test_dns_resolution_timeout_fails_closed(self):
+        import asyncio
+        async def hung_getaddrinfo(host, port, **kwargs):
+            raise asyncio.TimeoutError()
+        with patch("asyncio.BaseEventLoop.getaddrinfo", new=hung_getaddrinfo):
+            with self.assertRaises(OSError):
+                await resolve_public_ip("www.w3.org")
+
+    async def test_transport_dials_pinned_ip_and_preserves_tls_hostname(self):
+        from httpcore._backends.anyio import AnyIOBackend
+        calls = []
+        async def checked(host, port):
+            self.assertEqual((host, port), ("www.w3.org", 443))
+            return "93.184.215.14"
+        async def dial(self_obj, host, port, **kwargs):
+            calls.append((host, port))
+            return object()
+        with patch("public_article_reader.resolve_public_ip", new=checked):
+            with patch.object(AnyIOBackend, "connect_tcp", new=dial):
+                await PublicIPBackend().connect_tcp("www.w3.org", 443)
+        self.assertEqual(calls, [("93.184.215.14", 443)])
 
     async def test_no_redirect_no_binary_no_excessive_content(self):
         url = "https://www.w3.org/TR/WCAG22/"
