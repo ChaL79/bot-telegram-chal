@@ -78,11 +78,26 @@ QUERY_FILLER = frozenset({
     "without", "paid", "product", "products", "evidence", "actual",
     "using", "answer", "questions", "organization", "organizations",
     "website", "websites", "web", "docs", "guide", "guides",
+    # Malay prompt scaffolding must not displace technical subject terms.
+    "bandingkan", "berdasarkan", "rasmi", "dengan", "perbezaan",
+    "sebenar", "cuba", "baca", "kandungan", "sekurang", "kurangnya",
+    "dua", "tiga", "berbeza", "setiap", "halaman", "berjaya",
+    "asingkan", "metadata", "sahaja", "gagal", "diakses", "jangan",
+    "reka", "keputusan", "ujian", "petikan",
 })
 
 
 def _terms(value: str) -> list[str]:
-    return [word for word in re.findall(r"[a-z0-9]+", value.casefold())
+    # Keep hyphenated product names and their version as one search concept.
+    # "Wi-Fi 7", "WiFi7", and "WiFi 7" all get wifi7 + wifi; the same
+    # normalization is applied to titles/snippets when scoring RSS hits.
+    value = value.casefold()
+    value = re.sub(r"\\bwi[\\s-]*fi\\b", "wifi", value)
+    value = re.sub(r"\\btp[\\s-]*link\\b", "tplink", value)
+    value = re.sub(r"\\bmulti[\\s-]*link\\b", "multilink", value)
+    value = re.sub(r"\\b([256])\\s*ghz\\b", r"\\1ghz", value)
+    value = re.sub(r"\\bwifi[\\s-]*([67])\\b", r"wifi\\1 wifi", value)
+    return [word for word in re.findall(r"[a-z0-9]+", value)
             if word not in QUERY_FILLER and len(word) > 1]
 
 
@@ -100,6 +115,8 @@ TOPIC_ANCHORS = frozenset({
     "ice", "sheets", "melting", "climate",
     "wcag", "accessibility", "keyboard", "focus", "visibility",
     "obscured", "w3c", "mdn", "govuk",
+    # Cross-domain consumer/technical research; not a vendor URL allowlist.
+    "wifi7", "wifi6", "wifi", "mlo", "6ghz", "latency", "multilink",
 })
 IDENTITY_ANCHORS = frozenset({
     "passkeys", "passkey", "fido2", "totp", "mfa", "otp", "phishing",
@@ -368,7 +385,9 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
     if not terms:
         return []
     query_text = query
-    query = " ".join(terms)[:160]
+    # Search public indexes with core concepts, not a 12-term AND-like
+    # sentence containing vendors, commentary, and unrelated instructions.
+    query = " ".join(terms[:6])[:160]
 
     async def search(session: httpx.AsyncClient) -> list[dict]:
         tech = technical_topic(terms)
