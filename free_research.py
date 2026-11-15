@@ -38,6 +38,7 @@ QUERY_FILLER = frozenset({
     "verify", "verified", "verification", "official", "whether", "from",
     "identify", "include", "documented", "documentation", "assumptions",
     "assumption", "actual", "read", "reading", "pages", "page", "provide",
+    "specifically", "specific", "exactly", "exact", "particular", "separately",
 })
 
 

@@ -250,6 +250,110 @@ class SourceReaderTests(unittest.IsolatedAsyncioTestCase):
             sources = await enrich_with_read_excerpts("Google Flow", [], client=client)
         self.assertEqual(sources, [])
 
+    def test_exact_model_pricing_section_keeps_free_token_rows(self):
+        pricing = """# Gemini API pricing
+# Gemini 3.5 Flash-Lite
+Standard
+Free Tier
+Paid Tier, per 1M tokens in USD
+Input price
+Free of charge
+$0.10
+Output price
+Free of charge
+$0.40
+Google Search grounding
+Not available
+5,000 free prompts per month
+# Gemini 4 Carbon
+Standard
+Free Tier
+Paid Tier
+Input price
+Not available
+$2.00
+Output price
+Not available
+$12.00
+"""
+        answer = select_relevant_excerpt(
+            pricing,
+            "Is gemini-3.5-flash-lite free input and output on Free Tier?")
+        self.assertIn("Gemini 3.5 Flash-Lite", answer)
+        self.assertIn("Input price", answer)
+        self.assertIn("Output price", answer)
+        self.assertEqual(answer.count("Free of charge"), 2)
+        self.assertNotIn("Gemini 4 Carbon", answer)
+
+    def test_comparing_named_models_includes_both_without_other_model(self):
+        pricing = """# Gemini 3.5 Flash-Lite
+Standard
+Free Tier
+Input price
+Free of charge
+Output price
+Free of charge
+# Gemini 4 Carbon
+Standard
+Free Tier
+Input price
+Not available
+Output price
+Not available
+# Gemini 4 Hydrogen
+Standard
+Free Tier
+Input price
+Not available
+"""
+        answer = select_relevant_excerpt(
+            pricing, "Compare gemini-3.5-flash-lite and gemini-4-carbon free tier")
+        self.assertIn("Gemini 3.5 Flash-Lite", answer)
+        self.assertIn("Gemini 4 Carbon", answer)
+        self.assertNotIn("Gemini 4 Hydrogen", answer)
+
+    def test_missing_flash_lite_section_cannot_appear_as_verified(self):
+        pricing = """# Gemini 4 Carbon
+Standard
+Free Tier
+Input price
+Not available
+Output price
+Not available
+"""
+        answer = select_relevant_excerpt(
+            pricing, "What does gemini-3.5-flash-lite charge?")
+        self.assertNotIn("Gemini 3.5 Flash-Lite", answer)
+        self.assertNotIn("Free of charge", answer)
+
+    async def test_fetch_passes_exact_model_query_for_pricing(self):
+        from source_reader import GOOGLE_DOCS
+        pricing = b"""# Gemini 3.5 Flash-Lite
+Standard
+Free Tier
+Input price
+Free of charge
+Output price
+Free of charge
+# Gemini 4 Carbon
+Standard
+Free Tier
+Input price
+Not available
+"""
+        def mock(req):
+            return httpx.Response(
+                200, headers={"content-type": "text/markdown"},
+                content=pricing)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as cli:
+            sources = await enrich_with_read_excerpts(
+                "Google AI Studio gemini-3.5-flash-lite Free Tier input output pricing",
+                [], client=cli)
+        found = [x for x in sources if x["url"] == GOOGLE_DOCS["studio_free"][0]]
+        self.assertEqual(len(found), 1)
+        self.assertIn("Gemini 3.5 Flash-Lite", found[0]["excerpt"])
+        self.assertNotIn("Gemini 4 Carbon", found[0]["excerpt"])
+
     def test_official_doc_selection_and_no_fabricated_page(self):
         self.assertEqual(recommended_official_docs("Python asyncio.Semaphore")[0]["url"], OFFICIAL_SEMAPHORE)
         self.assertEqual(recommended_official_docs("Weather tomorrow"), [])
