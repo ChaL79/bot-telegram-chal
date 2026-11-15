@@ -501,6 +501,39 @@ No content on data practices.
             "Compare Gemini API privacy, human reviewers, Unpaid Services and Paid Services")
         self.assertEqual(refs[0]["url"], policy)
 
+    async def test_nist_html_container_is_read_only_at_exact_nist_url(self):
+        from source_reader import IDENTITY_DOCS
+        nist_url = IDENTITY_DOCS[0][0]
+        html = (b"<html><body><nav>Navigation junk</nav>"
+                b"<div class='container'><div class='row'>"
+                b"<h1>NIST Authenticator and Verifier Requirements</h1>"
+                b"<p>Phishing resistance is important. Authenticator OTP codes "
+                b"must not be considered phishing resistant when manually entered.</p>"
+                b"</div></div><footer>Footer junk</footer></body></html>")
+        seen = []
+        def mock(req):
+            seen.append(str(req.url))
+            return httpx.Response(200, headers={"content-type":"text/html"}, content=html)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as cli:
+            excerpt = await fetch_page_excerpt(
+                nist_url, "NIST phishing resistance authenticator OTP", client=cli)
+            self.assertIn("must not be considered phishing resistant", excerpt)
+            self.assertNotIn("Navigation junk", excerpt)
+            self.assertNotIn("Footer junk", excerpt)
+            other = await fetch_page_excerpt(IDENTITY_DOCS[2][0],
+                                            "NIST phishing resistance authenticator OTP", client=cli)
+            self.assertEqual(other, "")
+        self.assertEqual(seen, [nist_url, IDENTITY_DOCS[2][0]])
+
+    async def test_nist_container_does_not_enable_unapproved_document_fetch(self):
+        rejected = "https://pages.nist.gov/800-63-4/private/"
+        self.assertFalse(is_approved_document_url(rejected))
+        async with httpx.AsyncClient(transport=httpx.MockTransport(
+            lambda req: self.fail("Unapproved URL must never be fetched")
+        )) as cli:
+            self.assertEqual(await fetch_page_excerpt(
+                rejected, "NIST phishing resistance", client=cli), "")
+
     def test_identity_research_selects_three_official_sources_without_general_crawl(self):
         from source_reader import IDENTITY_DOCS, identity_official_docs
         q = ("Conduct independent multi-source research comparing FIDO2 passkeys, "
