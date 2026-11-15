@@ -46,7 +46,7 @@ class FreeResearchTests(unittest.IsolatedAsyncioTestCase):
                 </channel></rss>""")
             if req.url.host == "en.wikipedia.org":
                 return httpx.Response(200, json={"query": {"search": [
-                    {"title": "Python async programming", "snippet": "Programming"}
+                    {"title": "Python asyncio programming", "snippet": "Programming"}
                 ]}})
             if req.url.host == "news.google.com":
                 return httpx.Response(503)
