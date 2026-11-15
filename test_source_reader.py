@@ -147,6 +147,39 @@ class SourceReaderTests(unittest.IsolatedAsyncioTestCase):
         ]:
             self.assertFalse(is_approved_document_url(url))
 
+    async def test_aistudio_markdown_and_plaintext_can_be_verified(self):
+        from source_reader import GOOGLE_DOCS
+        source = GOOGLE_DOCS["studio_start"][0]
+        for mime in ("text/markdown", "text/plain; charset=utf-8"):
+            def mock(req):
+                return httpx.Response(200, headers={"content-type": mime},
+                    content=(b"# Google AI Studio Getting Started\\n"
+                             b"Google AI Studio lets you explore Gemini API models.\\n"
+                             b"Gemini API Free Tier has limited model access, subject to pricing.\\n"))
+            async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as cli:
+                excerpt = await fetch_page_excerpt(source, "Google AI Studio Gemini API Free Tier", client=cli)
+            self.assertIn("Gemini API", excerpt)
+
+    async def test_aistudio_non_document_and_unapproved_text_rejected(self):
+        from source_reader import GOOGLE_DOCS
+        source = GOOGLE_DOCS["studio_free"][0]
+        cases = [
+            ("application/json", b'{"error": "Gemini API Free Tier is currently unavailable"}'),
+            ("text/plain", b"Access denied"),
+            ("text/markdown", b"# Request blocked\\nPlease sign in to continue"),
+        ]
+        for mime, content in cases:
+            async with httpx.AsyncClient(transport=httpx.MockTransport(
+                lambda req: httpx.Response(200, headers={"content-type": mime}, content=content)
+            )) as cli:
+                result = await fetch_page_excerpt(source, "Gemini API Free Tier pricing", client=cli)
+            self.assertEqual(result, "")
+        async with httpx.AsyncClient(transport=httpx.MockTransport(
+            lambda req: httpx.Response(200, headers={"content-type":"text/plain"},
+                content=b"Python asyncio Semaphore controls task concurrency and Free Tier rate limiting.")
+        )) as cli:
+            self.assertEqual(await fetch_page_excerpt(OFFICIAL_SEMAPHORE, "Python asyncio Semaphore", client=cli), "")
+
     async def test_google_source_excerpts_are_read_and_preferred_over_irrelevant_metadata(self):
         from source_reader import google_official_docs
         hits = []

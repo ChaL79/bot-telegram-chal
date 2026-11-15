@@ -194,7 +194,7 @@ def select_relevant_excerpt(text: str, query: str) -> str:
 async def fetch_page_excerpt(
     url: str, question: str, *, client: Optional[httpx.AsyncClient] = None
 ) -> str:
-    """Bounded HTTPS GET; never follow redirects or download non-HTML."""
+    """Bounded HTTPS GET; permit only exact allowlisted redirects and document media."""
     if not is_approved_document_url(url):
         return ""
 
@@ -223,10 +223,16 @@ async def fetch_page_excerpt(
                         log.info("Document excerpt unavailable host=%s status=%s",
                                  urlsplit(current).hostname, resp.status_code)
                         return ""
-                    mime = resp.headers.get("content-type", "").lower()
-                    if "text/html" not in mime:
-                        log.info("Document excerpt rejected non-HTML host=%s",
-                                 urlsplit(current).hostname)
+                    mime = resp.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+                    host = urlsplit(current).hostname or ""
+                    is_studio = host == "aistudio.google.com" and is_approved_document_url(current)
+                    html_mime = mime in ("text/html", "application/xhtml+xml")
+                    text_mime = mime in ("text/plain", "text/markdown")
+                    # Aistudio documentation may be returned as Markdown or plain text
+                    # rather than HTML. Only allow these on exact approved URLs.
+                    if not html_mime and not (is_studio and text_mime):
+                        log.info("Document excerpt unsupported media host=%s type=%s",
+                                 host, mime[:60] or "missing")
                         return ""
                     length = resp.headers.get("content-length", "")
                     if length.isdecimal() and int(length) > MAX_PAGE_BYTES:
@@ -236,9 +242,27 @@ async def fetch_page_excerpt(
                         buf.extend(piece)
                         if len(buf) > MAX_PAGE_BYTES:
                             return ""
-                parser = MainText()
-                parser.feed(buf.decode("utf-8", errors="replace"))
-                excerpt = select_relevant_excerpt(parser.content(), question)
+                raw = buf.decode("utf-8", errors="replace")
+                # HTML pages must have an actual article/main region. A JS shell
+                # or generic login page must not count as document evidence.
+                if html_mime:
+                    parser = MainText()
+                    parser.feed(raw)
+                    page_text = parser.content()
+                else:
+                    # Reject generic anti-bot/error messages and content without
+                    # a specific AI Studio/Gemini API subject mention.
+                    if len(raw.strip()) < 100 or not any(
+                        term in raw.casefold() for term in
+                        ("google ai studio", "gemini api", "gemini model", "free tier")
+                    ):
+                        log.info("Document excerpt rejected low-content text host=%s", host)
+                        return ""
+                    page_text = "\n".join(
+                        clean(line, 650) for line in raw.splitlines()
+                        if clean(line, 650)
+                    )
+                excerpt = select_relevant_excerpt(page_text, question)
                 if not excerpt:
                     log.info("Document excerpt no topical text host=%s",
                              urlsplit(current).hostname)
