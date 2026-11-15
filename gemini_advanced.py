@@ -23,6 +23,9 @@ RESEARCH_MODEL = "gemini-3.5-flash-lite"
 QUOTA_KEY = "_advanced_daily_quota_v1"
 MODE_LIMITS = {"power": (2, 12), "deepdive": (2, 12)}  # RPM, local per-UTC-day cap
 MAX_INPUT_CHARS = 3200
+# One Gemini API request per command. Deep Dive may take longer to generate
+# from multiple real source excerpts; allow more read time WITHOUT retries.
+GEMINI_READ_TIMEOUT = {"power": 35.0, "deepdive": 55.0}
 
 RESEARCH_PROMPT = (
     "Anda penganalisis penyelidikan yang teliti. Jawab dalam Bahasa Melayu. "
@@ -211,18 +214,27 @@ async def run_advanced(
     }
 
     async def request(session: httpx.AsyncClient) -> tuple[str, bool]:
+        started = time.monotonic()
         try:
             response = await session.post(
                 f"{GEMINI_API_BASE}/{model}:generateContent",
                 headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
                 json=payload,
-                timeout=httpx.Timeout(35.0, connect=5.0),
+                timeout=httpx.Timeout(GEMINI_READ_TIMEOUT[mode], connect=5.0),
             )
-        except (httpx.TimeoutException, httpx.RequestError):
-            log.warning("Advanced Gemini %s network or timeout failure", mode)
+        except httpx.TimeoutException as exc:
+            # Do not log raw request/response headers, user text or API keys.
+            log.warning("Advanced Gemini %s timeout kind=%s elapsed=%.1fs",
+                        mode, type(exc).__name__, time.monotonic() - started)
             if research and sources:
-                return research_fallback(sources, "rangkaian atau masa tamat"), False
-            return "Gemini lambat atau tidak dapat dihubungi. Cuba soalan lebih ringkas.", False
+                return research_fallback(sources, "masa tamat"), False
+            return "Gemini melebihi had masa respons. Cuba soalan lebih ringkas.", False
+        except httpx.RequestError as exc:
+            log.warning("Advanced Gemini %s network failure kind=%s elapsed=%.1fs",
+                        mode, type(exc).__name__, time.monotonic() - started)
+            if research and sources:
+                return research_fallback(sources, "rangkaian"), False
+            return "Gemini tidak dapat dihubungi. Cuba lagi kemudian.", False
         if response.status_code == 429:
             return "Kuota Free Tier Gemini sudah dicapai. Cuba lagi selepas reset.", False
         if response.status_code in (401, 403):
