@@ -5,6 +5,7 @@ import httpx
 from free_research import (
     allowed_source_url, parse_rss, parse_wikipedia, public_source_search,
     evidence_text, references_text, search_query_terms, source_relevance,
+    parse_stackexchange, parse_hackernews,
 )
 
 
@@ -50,15 +51,62 @@ class FreeResearchTests(unittest.IsolatedAsyncioTestCase):
                 ]}})
             if req.url.host == "news.google.com":
                 return httpx.Response(503)
+            if req.url.host in ("api.stackexchange.com", "hn.algolia.com"):
+                return httpx.Response(403)
             raise AssertionError("Unapproved host")
         async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as client:
             sources = await public_source_search("Cari sumber tentang Python asyncio rate limiting. Ringkaskan dapatan.", client=client)
-        self.assertEqual(len(calls), 3)
+        self.assertEqual(len(calls), 5)
         self.assertEqual(len(sources), 2)
         self.assertTrue(any("docs.python.org" in source["url"] for source in sources))
         self.assertIn("q=python%20asyncio%20rate%20limiting", calls[0].lower())
         self.assertIn("metadata", references_text(sources))
         self.assertIn("[1]", evidence_text(sources))
+
+    def test_stackoverflow_metadata_parsing(self):
+        data = {"items": [
+            {"title": "Python asyncio rate limiting", "link": "https://stackoverflow.com/questions/1234/example",
+             "tags": ["python", "python-asyncio", "rate-limiting"]},
+            {"title": "Bad", "link": "http://localhost/private", "tags": ["python"]},
+        ]}
+        sources = parse_stackexchange(data)
+        self.assertEqual(len(sources), 1)
+        self.assertIn("asyncio", sources[0]["title"])
+        self.assertIn("python-asyncio", sources[0]["snippet"])
+
+    def test_hackernews_source_metadata(self):
+        data = {"hits": [
+            {"title": "Python asyncio rate limiting", "url": "https://example.org/article",
+             "created_at": "2026-11-15"},
+            {"title": "Local", "url": "http://localhost/secret"}
+        ]}
+        sources = parse_hackernews(data)
+        self.assertEqual(len(sources), 1)
+        self.assertIn("example.org", sources[0]["url"])
+
+    async def test_technical_sources_survive_blocked_rss(self):
+        hosts = []
+        def mock(req):
+            hosts.append(req.url.host)
+            if req.url.host == "api.stackexchange.com":
+                return httpx.Response(200, json={"items": [
+                    {"title": "Python asyncio rate limiter with semaphore",
+                     "link": "https://stackoverflow.com/questions/123/example",
+                     "tags": ["python", "python-asyncio", "rate-limiting"]},
+                ]})
+            if req.url.host == "hn.algolia.com":
+                return httpx.Response(200, json={"hits": [
+                    {"title": "Python asyncio rate limiting using token bucket",
+                     "url": "https://engineering.example.org/python-asyncio-rate"}
+                ]})
+            return httpx.Response(403)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as client:
+            items = await public_source_search(
+                "Cari sumber tentang Python asyncio rate limiting.", client=client)
+        self.assertIn("api.stackexchange.com", hosts)
+        self.assertIn("hn.algolia.com", hosts)
+        self.assertEqual(len(items), 2)
+        self.assertTrue(all("asyncio" in x["title"].lower() for x in items))
 
     def test_extract_technical_topic_ignores_malay_command_words(self):
         query = "Cari sumber tentang Python asyncio rate limiting. Ringkaskan dapatan, bezakan fakta dan andaian dan sertakan pautan."

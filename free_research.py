@@ -58,24 +58,104 @@ def search_query_terms(request: str) -> list[str]:
     return unique
 
 
+
+TECH_KEYWORDS = frozenset({
+    "python", "asyncio", "javascript", "typescript", "java", "rust", "golang",
+    "github", "docker", "kubernetes", "api", "programming", "coding",
+    "security", "cybersecurity", "linux", "regex", "sql", "algorithm",
+    "rate", "limiting", "semaphore", "token", "telegram", "bot", "llm",
+})
+
+
+def _canonical(term: str) -> str:
+    """Minimal normalization to match rate limit vs rate limiting."""
+    if term in ("limit", "limits", "limited", "limiting", "limiter"):
+        return "limit"
+    if term in ("requests", "requesting", "request"):
+        return "request"
+    if term in ("thread", "threads", "threading"):
+        return "thread"
+    return term
+
+
+def technical_topic(terms: list[str]) -> bool:
+    return any(word in TECH_KEYWORDS for word in terms)
+
+
+def parse_stackexchange(payload: dict, limit: int = 6) -> list[dict]:
+    """Only Stack Overflow's public question metadata, not accepted answers."""
+    if not isinstance(payload, dict):
+        return []
+    items = payload.get("items")
+    if not isinstance(items, list):
+        return []
+    found = []
+    for q in items[:limit * 3]:
+        if not isinstance(q, dict):
+            continue
+        uri = q.get("link", "")
+        title = clean(q.get("title", ""), 115)
+        if not allowed_source_url(uri) or not title:
+            continue
+        tags = q.get("tags", [])
+        if not isinstance(tags, list):
+            tags = []
+        tag_text = " ".join(clean(t, 25) for t in tags[:7] if isinstance(t, str))
+        # Tags are actual metadata; do not claim answers are verified.
+        desc = f"Stack Overflow community question. Tags: {tag_text}"
+        found.append({
+            "provider": "Stack Overflow (community Q&A)",
+            "title": title, "url": uri, "snippet": desc[:300],
+            "published": "",
+        })
+        if len(found) >= limit:
+            break
+    return found
+
+
+def parse_hackernews(payload: dict, limit: int = 5) -> list[dict]:
+    """Headline metadata from Hacker News Algolia; not a primary source."""
+    if not isinstance(payload, dict):
+        return []
+    hits = payload.get("hits")
+    if not isinstance(hits, list):
+        return []
+    found = []
+    for hit in hits[:limit * 3]:
+        if not isinstance(hit, dict):
+            continue
+        title = clean(hit.get("title", ""), 115)
+        uri = hit.get("url")
+        if not allowed_source_url(uri) or not title:
+            continue
+        found.append({
+            "provider": "Hacker News (community link)",
+            "title": title, "url": uri,
+            "snippet": "Hacker News listing; title only, article not independently checked.",
+            "published": clean(hit.get("created_at", ""), 45),
+        })
+        if len(found) >= limit:
+            break
+    return found
+
 def source_relevance(item: dict, query_terms: list[str]) -> int:
     """Require core subject matches; a generic 'CARI' result scores zero."""
     if not query_terms:
         return 0
-    title_terms = set(_terms(item.get("title", "")))
+    title_terms = {_canonical(x) for x in _terms(item.get("title", ""))}
     url = urlsplit(item.get("url", ""))
-    content_terms = set(_terms(
+    content_terms = {_canonical(x) for x in _terms(
         item.get("snippet", "") + " " + (url.hostname or "") + " " + url.path
-    ))
-    matched = set(query_terms) & (title_terms | content_terms)
-    minimum = 2 if len(query_terms) >= 3 else len(query_terms)
+    )}
+    sought = [_canonical(x) for x in query_terms]
+    matched = set(sought) & (title_terms | content_terms)
+    minimum = 2 if len(set(sought)) >= 3 else len(set(sought))
     if len(matched) < minimum:
         return 0
-    # Require at least one term near the beginning of the request (usually the topic),
-    # not just generic words like "rate" and "limiting" in an unrelated story.
-    if len(query_terms) >= 3 and not (set(query_terms[:2]) & matched):
+    # Require subject anchor, rather than broad incidental words.
+    if len(sought) >= 3 and not (set(sought[:2]) & matched):
         return 0
-    # Title matches are stronger than snippets / domain tokens.
+    # Title matches are more relevant than incidental snippet/domain tokens.
     return len(matched) + 2 * len(matched & title_terms)
 
 
@@ -167,6 +247,10 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
     query = " ".join(terms)[:160]
 
     async def search(session: httpx.AsyncClient) -> list[dict]:
+        tech = technical_topic(terms)
+        # Widen a long query to the core subject for topic-specific public indexes.
+        technical_query = " ".join(terms[:4])
+
         async def get_bing():
             resp = await session.get(
                 "https://www.bing.com/search",
@@ -174,8 +258,11 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
                 timeout=7.0,
             )
             if resp.status_code != 200:
+                log.info("Bing RSS response HTTP %s", resp.status_code)
                 return []
-            return parse_rss(resp.content, "Bing web-search RSS", 10)
+            items = parse_rss(resp.content, "Bing web-search RSS", 10)
+            log.info("Bing RSS parsed %d metadata results", len(items))
+            return items
 
         async def get_wikipedia():
             resp = await session.get(
@@ -185,8 +272,11 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
                 timeout=7.0,
             )
             if resp.status_code != 200 or len(resp.content) > MAX_BYTES:
+                log.info("Wikipedia API response HTTP %s", resp.status_code)
                 return []
-            return parse_wikipedia(resp.json(), 5)
+            items = parse_wikipedia(resp.json(), 5)
+            log.info("Wikipedia API parsed %d results", len(items))
+            return items
 
         async def get_news():
             resp = await session.get(
@@ -195,12 +285,55 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
                 timeout=7.0,
             )
             if resp.status_code != 200:
+                log.info("Google News RSS response HTTP %s", resp.status_code)
                 return []
-            return parse_rss(resp.content, "Google News RSS (headline)", 5)
+            items = parse_rss(resp.content, "Google News RSS (headline)", 5)
+            log.info("Google News RSS parsed %d metadata results", len(items))
+            return items
 
-        results = await asyncio.gather(
-            get_bing(), get_wikipedia(), get_news(), return_exceptions=True
-        )
+        async def get_stackexchange():
+            resp = await session.get(
+                "https://api.stackexchange.com/2.3/search/advanced",
+                params={"q": technical_query, "site": "stackoverflow",
+                        "sort": "relevance", "order": "desc", "pagesize": "8"},
+                timeout=8.0,
+            )
+            if resp.status_code != 200 or len(resp.content) > MAX_BYTES:
+                log.info("Stack Overflow API response HTTP %s", resp.status_code)
+                return []
+            try:
+                data = resp.json()
+            except ValueError:
+                return []
+            if data.get("backoff"):
+                log.info("Stack Exchange returned backoff; no retries performed")
+            items = parse_stackexchange(data, 8)
+            log.info("Stack Overflow API parsed %d metadata results", len(items))
+            return items
+
+        async def get_hackernews():
+            resp = await session.get(
+                "https://hn.algolia.com/api/v1/search",
+                params={"query": technical_query, "tags": "story", "hitsPerPage": "6"},
+                timeout=8.0,
+            )
+            if resp.status_code != 200 or len(resp.content) > MAX_BYTES:
+                log.info("Hacker News API response HTTP %s", resp.status_code)
+                return []
+            try:
+                data = resp.json()
+            except ValueError:
+                return []
+            items = parse_hackernews(data, 6)
+            log.info("Hacker News API parsed %d metadata results", len(items))
+            return items
+
+        providers = [get_bing(), get_wikipedia(), get_news()]
+        if tech:
+            # Relevant community references are helpful for programming questions.
+            # Not used as evidence of official API behavior.
+            providers.extend([get_stackexchange(), get_hackernews()])
+        results = await asyncio.gather(*providers, return_exceptions=True)
         ranked, urls = [], set()
         for result in results:
             if isinstance(result, BaseException):
@@ -214,8 +347,8 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
                 if score > 0:
                     ranked.append((score, item))
         ranked.sort(key=lambda pair: pair[0], reverse=True)
-        if not ranked:
-            log.info("Public source search found no relevant results for topic keywords")
+        log.info("Public source search selected %d of %d unique results (technical=%s)",
+                 min(len(ranked), MAX_SOURCES), len(urls), tech)
         return [item for _score, item in ranked[:MAX_SOURCES]]
 
     if client is not None:
