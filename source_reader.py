@@ -40,7 +40,7 @@ GOOGLE_DOCS = {
     "studio_free": ("https://aistudio.google.com/docs/pricing",
                     "Gemini API free and paid pricing",
                     "Gemini API Free Tier limited models paid pricing"),
-    "api_terms": ("https://aistudio.google.com/docs/terms",
+    "api_terms": ("https://aistudio.google.com/docs/terms.md",
                   "Gemini API Additional Terms - Unpaid and Paid data use",
                   "Gemini API Unpaid Services Paid Services privacy use human review"),
     "antigravity_guide": ("https://antigravity.google/docs/getting-started",
@@ -232,54 +232,57 @@ def _targeted_pricing_excerpt(text: str, question: str) -> str:
 
 
 def _privacy_terms_excerpt(text: str) -> str:
-    """Return only fetched Unpaid/Paid data-use clauses from Google's terms.
+    """Extract genuine unpaid/paid policy paragraphs from official documentation.
 
-    Accept browser/Markdown section headings with optional '#' and trailing
-    'link' UI text, but never fabricate any policy clause. A page that lacks
-    both actual data-use statements returns no verified evidence.
+    Google's official .md representation wraps sentences across lines and uses
+    heading IDs, e.g. ## Unpaid Services {% id="unpaid-services" %}.
+    Rejoin soft wraps before matching. Do not invent missing clauses.
     """
-    lines = [x.strip() for x in text.splitlines() if x.strip()]
-    heading = lambda label: re.compile(
-        r"^(?:#{1,6}\s*)?" + re.escape(label) + r"(?:\s+link)?\s*$",
-        re.I,
+    if "Gemini API Additional Terms of Service" not in text:
+        return ""
+    # Only these two H2s define the relevant sections. Optional escaped hashes
+    # and link/anchor annotations are accepted; arbitrary matches are not.
+    heading = r"(?m)^\\?#{2}\s+{}\b[^\n]*$"
+    unpaid_match = re.search(heading.format("Unpaid Services"), text, re.I)
+    paid_match = re.search(heading.format("Paid Services"), text, re.I)
+    if not unpaid_match or not paid_match or paid_match.start() <= unpaid_match.end():
+        return ""
+    unpaid_part = text[unpaid_match.end():paid_match.start()]
+    next_h2 = re.search(r"(?m)^\\?#{2}\s+\w", text[paid_match.end():])
+    paid_part = text[paid_match.end():paid_match.end() + next_h2.start()] if next_h2 else text[paid_match.end():]
+
+    def paragraphs(raw: str) -> list[str]:
+        # Keep paragraph boundaries but join document soft line wraps.
+        cleaned = re.sub(r"\r\n?", "\n", raw)
+        cleaned = re.sub(r"(?m)^\\?#{3,6}\s+[^\n]*\n?", "\n\n", cleaned)
+        return [
+            clean(" ".join(p.splitlines()), 850)
+            for p in re.split(r"\n\s*\n", cleaned)
+            if p.strip()
+        ]
+
+    unpaid = paragraphs(unpaid_part)
+    paid = paragraphs(paid_part)
+    def find_one(paras, *tokens):
+        return next((p for p in paras if all(x in p.casefold() for x in tokens)), "")
+    unpaid_use = find_one(unpaid, "when you use unpaid services", "google uses")
+    reviewer = find_one(unpaid, "human reviewers may", "api input and output")
+    paid_use = find_one(paid, "when you use paid services", "doesn't use your prompts")
+    if not paid_use:
+        paid_use = find_one(paid, "when you use paid services", "does not use your prompts")
+    if not unpaid_use or not reviewer or not paid_use:
+        return ""
+    paid_qualifier = find_one(paid, "your access to gemini api", "active billing account")
+    paid_logging = find_one(paid, "for paid services", "logs prompts")
+    # Per-paragraph clipping is bounded; sections stay distinct. All clauses
+    # appear in the actually downloaded official document.
+    result = (
+        "Unpaid Services\n" + unpaid_use[:680] + "\n" + reviewer[:680] +
+        "\n\nPaid Services\n" + paid_use[:680] +
+        ("\n" + paid_qualifier[:240] if paid_qualifier else "") +
+        ("\n" + paid_logging[:250] if paid_logging else "")
     )
-    unpaid_heading = heading("Unpaid Services")
-    paid_heading = heading("Paid Services")
-    unpaid_start = next((i for i, x in enumerate(lines)
-                         if unpaid_heading.fullmatch(x)), None)
-    paid_start = next((i for i, x in enumerate(lines)
-                       if paid_heading.fullmatch(x)
-                       and unpaid_start is not None and i > unpaid_start), None)
-    if unpaid_start is None or paid_start is None:
-        return ""
-    # Respect the first section boundaries. Do not copy Grounding or unrelated
-    # clauses that follow Paid Services; no instructions from fetched text.
-    unpaid_lines = lines[unpaid_start + 1:paid_start]
-    paid_end = next((i for i in range(paid_start + 1, len(lines))
-                     if re.fullmatch(r"(?:#{1,6}\s*)?Payment Terms(?:\s+link)?", lines[i], re.I)), len(lines))
-    paid_lines = lines[paid_start + 1:paid_end]
-
-    def matches(lineset, anchors):
-        return [line for line in lineset
-                if any(a in line.casefold() for a in anchors)]
-
-    unpaid = matches(unpaid_lines, (
-        "when you use unpaid services", "human reviewers may",
-        "do not submit sensitive", "any services that are offered free",
-    ))
-    paid = matches(paid_lines, (
-        "when you use paid services", "google doesn't use your prompts",
-        "google does not use your prompts", "google logs prompts",
-        "your access to gemini api is a",
-    ))
-    if (not any("when you use unpaid services" in x.casefold() for x in unpaid)
-            or not any("human reviewers may" in x.casefold() for x in unpaid)
-            or not any(("doesn't use your prompts" in x.casefold()
-                        or "does not use your prompts" in x.casefold()) for x in paid)):
-        return ""
-    left = MAX_EXCERPT // 2
-    return ("Unpaid Services\n" + "\n".join(unpaid)[:left] +
-            "\n\nPaid Services\n" + "\n".join(paid)[:MAX_EXCERPT - left - 32])[:MAX_EXCERPT]
+    return result[:MAX_EXCERPT]
 
 
 def select_relevant_excerpt(text: str, query: str) -> str:
