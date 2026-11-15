@@ -14,6 +14,7 @@ from urllib.parse import urlsplit, urljoin
 from typing import Optional
 
 import httpx
+from public_article_reader import read_public_html, safe_public_article_url
 from free_research import (
     clean, search_query_terms, OFFICIAL_SCIENCE_HOSTS, SCIENCE_TOPIC_WORDS,
     OFFICIAL_SCIENCE_SITES,
@@ -591,6 +592,20 @@ async def enrich_with_read_excerpts(
         if len(approved_candidates) >= capacity:
             break
 
+    # General URLs are never accepted from the user's prompt; only actual
+    # public-search results may enter the bounded reader. Limit to three pages
+    # across all methods, avoid adding domains as explicit allowlist entries.
+    general_candidate_urls = set()
+    if not official_google and not identity_docs:
+        for ref in sources:
+            url = ref.get("url", "")
+            if (len(approved_candidates) >= capacity or url in seen
+                    or not safe_public_article_url(url)):
+                continue
+            seen.add(url)
+            approved_candidates.append(ref)
+            general_candidate_urls.add(url)
+
     async def load(ref):
         focus = ref.get("focus", question)
         if ref["url"] in {seed[0] for seed in SCIENCE_SEA_LEVEL_DOCS}:
@@ -607,7 +622,18 @@ async def enrich_with_read_excerpts(
             # The specific model ID must reach section extraction; the fixed
             # generic "pricing" focus previously hid it completely.
             focus = question
-        excerpt = await fetch_page_excerpt(ref["url"], focus, client=client)
+        if ref["url"] in general_candidate_urls:
+            page_html = await read_public_html(ref["url"], client=client)
+            if page_html:
+                parser = MainText()
+                parser.feed(page_html)
+                excerpt = select_relevant_excerpt(parser.content(), question)
+                if excerpt and len(excerpt) < 65:
+                    excerpt = ""
+            else:
+                excerpt = ""
+        else:
+            excerpt = await fetch_page_excerpt(ref["url"], focus, client=client)
         # An institution's identity alone is not proof that the fetched page
         # answers the scientific question (e.g. hurricane satellite imagery).
         host = urlsplit(ref["url"]).hostname or ""
