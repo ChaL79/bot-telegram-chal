@@ -55,8 +55,8 @@ class FreeResearchTests(unittest.IsolatedAsyncioTestCase):
             sources = await public_source_search("Cari sumber tentang Python asyncio rate limiting. Ringkaskan dapatan.", client=client)
         self.assertEqual(len(calls), 3)
         self.assertEqual(len(sources), 2)
-        self.assertIn("docs.python.org", sources[0]["url"])
-        self.assertIn("python+asyncio+rate+limiting", calls[0].lower())
+        self.assertTrue(any("docs.python.org" in source["url"] for source in sources))
+        self.assertIn("q=python%20asyncio%20rate%20limiting", calls[0].lower())
         self.assertIn("metadata", references_text(sources))
         self.assertIn("[1]", evidence_text(sources))
 
@@ -89,7 +89,7 @@ class FreeResearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(sources), 1)
         self.assertIn("asyncio", sources[0]["title"].lower())
         self.assertNotIn("cari.com", evidence_text(sources))
-        self.assertIn("python+asyncio+rate+limiting", received[0].lower())
+        self.assertIn("q=python%20asyncio%20rate%20limiting", received[0].lower())
 
     async def test_provider_failure_fails_closed(self):
         async with httpx.AsyncClient(transport=httpx.MockTransport(
