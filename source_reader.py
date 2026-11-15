@@ -33,10 +33,12 @@ GOOGLE_DOCS = {
                          "Gemini Apps supported countries", "Gemini web app supported countries Brunei"),
     "gemini_overview": ("https://blog.google/innovation-and-ai/products/google-ai-updates-may-2025/",
                         "Google Gemini app feature overview (June 2025)", "Gemini app Deep Research Canvas Gemini Live features"),
-    "studio_start": ("https://ai.google.dev/gemini-api/docs/ai-studio-quickstart",
-                     "Google AI Studio quickstart", "Google AI Studio prompt API models build"),
-    "studio_free": ("https://ai.google.dev/gemini-api/docs/pricing",
-                    "Gemini API free and paid pricing", "Gemini API Free Tier limited models paid pricing"),
+    "studio_start": ("https://aistudio.google.com/docs/get-started",
+                     "Google AI Studio and Gemini API getting started",
+                     "Google AI Studio Gemini API key Free Tier prompts models SDK"),
+    "studio_free": ("https://aistudio.google.com/docs/pricing",
+                    "Gemini API free and paid pricing",
+                    "Gemini API Free Tier limited models paid pricing"),
     "antigravity_guide": ("https://antigravity.google/docs/getting-started",
                           "Google Antigravity getting started", "Antigravity coding agents IDE CLI"),
     "antigravity_free": ("https://antigravity.google/pricing",
@@ -58,8 +60,17 @@ def google_official_docs(question: str) -> list[dict]:
     if not google_context:
         return []
     requested = []
-    if "gemini" in q or "google ai" in q:
-        requested.extend(["gemini_overview", "gemini_available"])
+    # "Google AI Studio" is a developer product, NOT a request to research the
+    # consumer Gemini app. Avoid spending the first source slots on wrong products.
+    consumer_gemini = any(x in q for x in ("gemini ai", "gemini app", "gemini assistant"))
+    if consumer_gemini:
+        requested.append("gemini_available")
+        # For a single-product query an overview adds value; for a five-product
+        # comparison, prefer accessibility and pricing references for all five.
+        product_count = sum(bool(x in q) for x in
+            ("ai studio", "antigravity", "notebooklm", "flow"))
+        if product_count <= 2:
+            requested.append("gemini_overview")
     if "ai studio" in q or "aistudio" in q:
         requested.extend(["studio_start", "studio_free"])
     if "antigravity" in q:
@@ -95,7 +106,8 @@ def is_approved_document_url(url: str) -> bool:
                 b = urlsplit(base)
                 if b.hostname == host and b.path.rstrip("/") == path.rstrip("/"):
                     return True
-        if host in ("support.google.com", "ai.google.dev", "antigravity.google", "blog.google"):
+        if host in ("support.google.com", "ai.google.dev", "aistudio.google.com",
+                    "antigravity.google", "blog.google"):
             return False
         if host == "docs.python.org":
             return bool(re.fullmatch(r"/3(?:\.\d+)?/(?:library/[a-z0-9_.-]+\.html)?", path))
