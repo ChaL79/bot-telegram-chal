@@ -120,6 +120,34 @@ class PublicReaderSecurityTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(x["read_status"]=="verified_page_excerpt" for x in results))
         self.assertTrue(all("Keyboard" in x["excerpt"] for x in results))
 
+    async def test_independent_domain_priority(self):
+        urls = [
+            "https://www.w3.org/WAI/standards-guidelines/wcag/docs/",
+            "https://www.w3.org/WAI/standards-guidelines/wcag/",
+            "https://www.w3.org/TR/WCAG22/",
+            "https://developer.mozilla.org/en-US/docs/Web/Accessibility/Keyboard",
+            "https://www.gov.uk/service-manual/helping-people-to-use-your-service/testing-for-accessibility",
+        ]
+        sources = [{"title":"WCAG 2.2 keyboard and focus visibility",
+                    "url":url, "provider":"Bing RSS", "snippet":"WCAG keyboard focus",
+                    "published":""} for url in urls]
+        visited = []
+        def mock(req):
+            visited.append(str(req.url))
+            return httpx.Response(200, headers={"content-type":"text/html"},
+                content=b"<html><main><h1>WCAG Keyboard Focus</h1>"
+                        b"<p>WCAG keyboard focus visibility and testing"
+                        b" support accessible interfaces.</p></main></html>")
+        async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as cli:
+            result = await enrich_with_read_excerpts(
+                "Compare WCAG keyboard focus visibility testing",
+                sources, client=cli)
+        self.assertEqual(len(visited), 3)
+        self.assertEqual([httpx.URL(u).host for u in visited],
+                         ["www.w3.org","developer.mozilla.org","www.gov.uk"])
+        self.assertEqual(sum(x["read_status"] == "verified_page_excerpt"
+                             for x in result), 3)
+
     async def test_malicious_metadata_rejected_before_network(self):
         sources = [{"title":"evil","url":"https://127.0.0.1/api/token",
                     "provider":"Bing RSS", "snippet":"WCAG","published":""}]
