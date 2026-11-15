@@ -6,6 +6,7 @@ import httpx
 from pydub import AudioSegment
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from gemini_extension import get_gemini_reply, MODEL_DEFAULT, is_authorized_owner
 
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL")
@@ -183,6 +184,43 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Reply with the requester's Telegram ID, for owner-only configuration."""
+    if update.effective_message and update.effective_user:
+        await update.effective_message.reply_text(f"Telegram user ID anda: {update.effective_user.id}")
+
+
+async def gemini_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """A direct opt-in Gemini command; rejects non-owner and group chats."""
+    msg = update.effective_message
+    user = update.effective_user
+    if not msg or not user:
+        return
+    owner_id = os.environ.get("GEMINI_OWNER_ID", "").strip()
+    if not is_authorized_owner(user.id, owner_id, getattr(update.effective_chat, "type", None)):
+        return
+    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        await msg.reply_text("Gemini API key belum disediakan dalam Render.")
+        return
+    question = " ".join(context.args or []).strip()
+    if not question:
+        await msg.reply_text("Contoh: /gemini Terangkan market regime XAUUSD")
+        return
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    try:
+        response = await asyncio.wait_for(
+            get_gemini_reply(question, api_key, os.environ.get("GEMINI_MODEL", MODEL_DEFAULT)),
+            timeout=25,
+        )
+    except (asyncio.TimeoutError, ValueError):
+        response = "Gemini gagal atau tamat masa. Semak model dan cuba lagi."
+    except Exception:
+        log.exception("Gemini handler failure")
+        response = "Ralat Gemini. Sila cuba lagi."
+    await msg.reply_text(response[:4000])
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
     if not msg or not msg.text:
@@ -249,6 +287,8 @@ def main():
     validate_environment()
     application = Application.builder().token(TOKEN).build()
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("myid", myid))
+    application.add_handler(CommandHandler("gemini", gemini_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(MessageHandler(filters.VOICE, handle_voice))
     webhook_url = f"{RENDER_URL.rstrip('/')}/{TOKEN}"
