@@ -583,7 +583,7 @@ def evidence_text(sources: list[dict]) -> str:
         if read:
             parts.append("Untrusted page excerpt: " + clean(source["excerpt"], 2400))
         elif source.get("read_status") == "page_unavailable":
-            parts.append("Evidence type: OFFICIAL PAGE FETCH FAILED (not read)")
+            parts.append("Note: No page text was retrieved or quoted.")
         else:
             parts.append("Snippet/headline only: " + clean(source.get("snippet", ""), 300))
         if source.get("published"):
