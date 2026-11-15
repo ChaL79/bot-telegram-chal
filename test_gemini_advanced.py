@@ -23,7 +23,7 @@ class AdvancedTests(unittest.IsolatedAsyncioTestCase):
             return httpx.Response(200, json={"candidates":[{"content":{"parts":[{"text":"Dokumentasi membincangkan Python."}]}}]})
         async with httpx.AsyncClient(transport=httpx.MockTransport(search_mock)) as search_client:
             async with httpx.AsyncClient(transport=httpx.MockTransport(ai_mock)) as client:
-                answer, ok = await run_advanced("Python references", "TEST_KEY", "deepdive",
+                answer, ok = await run_advanced("Python reference", "TEST_KEY", "deepdive",
                                                 client=client, search_client=search_client)
         self.assertTrue(ok)
         self.assertIn("https://docs.python.org/3/", answer)

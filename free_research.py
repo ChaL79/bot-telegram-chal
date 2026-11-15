@@ -23,6 +23,61 @@ WEB_HEADERS = {
     "Accept": "application/rss+xml,application/xml,application/json,text/xml;q=0.8,*/*;q=0.1",
 }
 
+# Search tasks use natural-language instructions in Malay and English.
+# Query terms must omit command words, otherwise "Cari" dominates Bing results.
+QUERY_FILLER = frozenset({
+    "cari", "carikan", "sumber", "tentang", "mengenai", "berkaitan", "di",
+    "dalam", "dari", "daripada", "untuk", "yang", "dan", "atau", "serta", "kepada",
+    "saya", "anda", "awak", "kamu", "tolong", "sila", "buat", "berikan", "beri",
+    "ringkaskan", "ringkasan", "dapatan", "bezakan", "fakta", "andaian",
+    "sertakan", "pautan", "hasil", "carian", "rujukan", "artikel",
+    "dokumentasi", "maklumat", "tunjukkan", "semak", "periksa", "kajian",
+    "search", "check", "please", "find", "source", "sources", "about",
+    "the", "a", "an", "of", "for", "with", "and", "or", "summarize", "compare",
+    "deep", "dive", "research", "explain", "how", "what",
+})
+
+
+def _terms(value: str) -> list[str]:
+    return [word for word in re.findall(r"[a-z0-9]+", value.casefold())
+            if word not in QUERY_FILLER and len(word) > 1]
+
+
+def search_query_terms(request: str) -> list[str]:
+    """Deterministically extract topic keywords; no model call or web request."""
+    request = clean(request, 480)
+    request = re.sub(r"^/(?:deepdive|power)\b\s*", "", request, flags=re.I)
+    # Keep only the primary question; trailing sentences are answer-format instructions.
+    request = re.split(r"[!?\.]\s+(?=[^\s])", request, maxsplit=1)[0]
+    unique = []
+    for word in _terms(request):
+        if word not in unique:
+            unique.append(word)
+        if len(unique) >= 12:
+            break
+    return unique
+
+
+def source_relevance(item: dict, query_terms: list[str]) -> int:
+    """Require core subject matches; a generic 'CARI' result scores zero."""
+    if not query_terms:
+        return 0
+    title_terms = set(_terms(item.get("title", "")))
+    url = urlsplit(item.get("url", ""))
+    content_terms = set(_terms(
+        item.get("snippet", "") + " " + (url.hostname or "") + " " + url.path
+    ))
+    matched = set(query_terms) & (title_terms | content_terms)
+    minimum = 2 if len(query_terms) >= 3 else len(query_terms)
+    if len(matched) < minimum:
+        return 0
+    # Require at least one term near the beginning of the request (usually the topic),
+    # not just generic words like "rate" and "limiting" in an unrelated story.
+    if len(query_terms) >= 3 and not (set(query_terms[:2]) & matched):
+        return 0
+    # Title matches are stronger than snippets / domain tokens.
+    return len(matched) + 2 * len(matched & title_terms)
+
 
 def clean(value: str, size: int = 280) -> str:
     """Plain text, bounded length: feeds and wiki snippets are untrusted input."""
@@ -106,9 +161,10 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
     Uses only public, read-only endpoints. Fails gracefully if hosts block Render.
     No private network fetches and no additional paid API keys.
     """
-    query = clean(query, 210)
-    if not query:
+    terms = search_query_terms(query)
+    if not terms:
         return []
+    query = " ".join(terms)[:160]
 
     async def search(session: httpx.AsyncClient) -> list[dict]:
         async def get_bing():
@@ -119,18 +175,18 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
             )
             if resp.status_code != 200:
                 return []
-            return parse_rss(resp.content, "Bing web-search RSS", 5)
+            return parse_rss(resp.content, "Bing web-search RSS", 10)
 
         async def get_wikipedia():
             resp = await session.get(
                 "https://en.wikipedia.org/w/api.php",
                 params={"action": "query", "list": "search", "srsearch": query,
-                        "srlimit": "3", "format": "json"},
+                        "srlimit": "5", "format": "json"},
                 timeout=7.0,
             )
             if resp.status_code != 200 or len(resp.content) > MAX_BYTES:
                 return []
-            return parse_wikipedia(resp.json(), 3)
+            return parse_wikipedia(resp.json(), 5)
 
         async def get_news():
             resp = await session.get(
@@ -140,12 +196,12 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
             )
             if resp.status_code != 200:
                 return []
-            return parse_rss(resp.content, "Google News RSS (headline)", 3)
+            return parse_rss(resp.content, "Google News RSS (headline)", 5)
 
         results = await asyncio.gather(
             get_bing(), get_wikipedia(), get_news(), return_exceptions=True
         )
-        sources, urls = [], set()
+        ranked, urls = [], set()
         for result in results:
             if isinstance(result, BaseException):
                 log.warning("Public source feed unavailable: %s", type(result).__name__)
@@ -154,10 +210,13 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
                 if item["url"] in urls:
                     continue
                 urls.add(item["url"])
-                sources.append(item)
-                if len(sources) >= MAX_SOURCES:
-                    return sources
-        return sources
+                score = source_relevance(item, terms)
+                if score > 0:
+                    ranked.append((score, item))
+        ranked.sort(key=lambda pair: pair[0], reverse=True)
+        if not ranked:
+            log.info("Public source search found no relevant results for topic keywords")
+        return [item for _score, item in ranked[:MAX_SOURCES]]
 
     if client is not None:
         return await search(client)
