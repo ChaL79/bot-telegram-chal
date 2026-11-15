@@ -92,11 +92,11 @@ def _terms(value: str) -> list[str]:
     # "Wi-Fi 7", "WiFi7", and "WiFi 7" all get wifi7 + wifi; the same
     # normalization is applied to titles/snippets when scoring RSS hits.
     value = value.casefold()
-    value = re.sub(r"\\bwi[\\s-]*fi\\b", "wifi", value)
-    value = re.sub(r"\\btp[\\s-]*link\\b", "tplink", value)
-    value = re.sub(r"\\bmulti[\\s-]*link\\b", "multilink", value)
-    value = re.sub(r"\\b([256])\\s*ghz\\b", r"\\1ghz", value)
-    value = re.sub(r"\\bwifi[\\s-]*([67])\\b", r"wifi\\1 wifi", value)
+    value = re.sub(r"\bwi[\s-]*fi\b", "wifi", value)
+    value = re.sub(r"\btp[\s-]*link\b", "tplink", value)
+    value = re.sub(r"\bmulti[\s-]*link\b", "multilink", value)
+    value = re.sub(r"\b([256])\s*ghz\b", r"\1ghz", value)
+    value = re.sub(r"\bwifi[\s-]*([67])\b", r"wifi\1 wifi", value)
     return [word for word in re.findall(r"[a-z0-9]+", value)
             if word not in QUERY_FILLER and len(word) > 1]
 
