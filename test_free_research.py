@@ -120,6 +120,24 @@ class FreeResearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(search_query_terms(query), ["python", "asyncio", "rate", "limiting"])
         self.assertEqual(search_query_terms("/deepdive Cari Python asyncio rate limiting"), ["python", "asyncio", "rate", "limiting"])
 
+    def test_aiolimiter_query_rejects_everify_and_va(self):
+        terms = search_query_terms(
+            "Verify from official aiolimiter documentation whether AsyncLimiter allows burst requests.")
+        self.assertIn("aiolimiter", terms)
+        self.assertNotIn("verify", terms)
+        self.assertNotIn("official", terms)
+        for item in [
+            {"title": "Home | E-Verify", "url": "https://www.e-verify.gov/",
+             "snippet": "Verify your eligibility and official records"},
+            {"title": "Verify | Veterans Affairs", "url": "https://www.va.gov/verify/",
+             "snippet": "Official government verification page"},
+        ]:
+            self.assertEqual(source_relevance(item, terms), 0)
+        relevant = {"title": "aiolimiter AsyncLimiter burst rate limiting",
+                    "url": "https://aiolimiter.readthedocs.io/en/stable/",
+                    "snippet": "AsyncLimiter max_rate time_period permits burst requests"}
+        self.assertGreater(source_relevance(relevant, terms), 0)
+
     def test_irrelevant_cari_results_are_rejected(self):
         terms = search_query_terms("Cari sumber tentang Python asyncio rate limiting")
         irrelevant = {"title": "CARI | Consumer Aesthetics Research Institute", "url": "https://cari.institute/",
