@@ -58,16 +58,27 @@ def safe_public_article_url(url: str) -> bool:
 
 
 async def resolve_public_ip(host: str, port: int = 443) -> str:
-    """Fail closed if DNS reports ANY non-global address."""
-    if port != 443 or not re.fullmatch(r"[a-zA-Z0-9.-]{4,250}", host):
+    """Fail closed for private/mixed DNS, and bound DNS resolution time.
+
+    Only the selected validated IP is passed to the transport's TCP dialer.
+    This prevents DNS rebinding between validation and connection.
+    """
+    if (port != 443 or not re.fullmatch(r"[a-zA-Z0-9.-]{4,250}", host)
+            or not safe_public_article_url("https://" + host + "/article")):
         raise OSError("Blocked destination")
-    addresses = await asyncio.get_running_loop().getaddrinfo(
-        host, port, family=socket.AF_UNSPEC, type=socket.SOCK_STREAM
-    )
-    ips = [str(ipaddress.ip_address(row[4][0])) for row in addresses]
-    if not ips or not all(ipaddress.ip_address(ip).is_global for ip in ips):
+    try:
+        addresses = await asyncio.wait_for(
+            asyncio.get_running_loop().getaddrinfo(
+                host, port, family=socket.AF_UNSPEC, type=socket.SOCK_STREAM
+            ), timeout=2.5
+        )
+        ips = [ipaddress.ip_address(row[4][0]) for row in addresses]
+    except (asyncio.TimeoutError, ValueError, OSError) as exc:
+        raise OSError("DNS lookup failed or timed out") from exc
+    if not ips or any(not ip.is_global for ip in ips):
         raise OSError("Non-public destination")
-    return ips[0]
+    # Prefer IPv4 where available, but use a validated global IPv6 otherwise.
+    return str(next((ip for ip in ips if ip.version == 4), ips[0]))
 
 
 class PublicIPBackend(AnyIOBackend):
