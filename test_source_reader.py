@@ -657,6 +657,66 @@ No content on data practices.
         self.assertTrue(all(x["read_status"] == "verified_page_excerpt" for x in sources))
         self.assertTrue(all("phishing" in x["excerpt"].lower() for x in sources))
 
+    def test_science_official_domain_article_allowlist(self):
+        good = [
+            "https://www.climate.gov/news-features/understanding-climate/climate-change-global-sea-level",
+            "https://sealevel.nasa.gov/faq/12/what-causes-sea-level-rise/",
+            "https://www.ipcc.ch/report/ar6/wg1/chapter/summary-for-policymakers/",
+        ]
+        for url in good:
+            self.assertTrue(is_approved_document_url(url), url)
+        bad = [
+            "https://www.climate.gov.evil.example/news-features/sea-level",
+            "https://sealevel.nasa.gov@evil.example/faq/12/what-causes-sea-level-rise/",
+            "http://www.climate.gov/news-features/understanding-climate/climate-change-global-sea-level",
+            "https://www.ipcc.ch:444/report/ar6/wg1/chapter/summary-for-policymakers/",
+            "https://science.nasa.gov/admin/login/sea-level-overview",
+            "https://www.ipcc.ch/wp-json/report/ar6/wg1",
+            "https://www.ipcc.ch/report/ar6/wg1/?token=secret",
+            "https://www.climate.gov/news-features/climate-change.pdf",
+            "https://www.climate.gov/overview",
+            "https://192.168.1.1/science/sea-level-global-rise",
+            "https://evil.example/science/sea-level-global-rise",
+        ]
+        for url in bad:
+            self.assertFalse(is_approved_document_url(url), url)
+
+    async def test_science_source_fetch_requires_topical_article_content(self):
+        good_url = "https://www.climate.gov/news-features/understanding-climate/climate-change-global-sea-level"
+        unrelated_url = "https://sealevel.nasa.gov/faq/12/latest-satellite-imagery/"
+        bad_url = "https://www.ipcc.ch/report/ar6/wg1/chapter/summary-for-policymakers/"
+        calls = []
+        def mock(req):
+            calls.append(str(req.url))
+            if str(req.url) == good_url:
+                return httpx.Response(200, headers={"content-type":"text/html"}, content=(
+                    b"<html><main><article><h1>Climate Change Global Sea Level</h1>"
+                    b"<p>Sea level rise comes from thermal expansion of ocean water "
+                    b"and melting of land ice glaciers and ice sheets.</p></article></main></html>"))
+            if str(req.url) == unrelated_url:
+                return httpx.Response(200, headers={"content-type":"text/html"}, content=(
+                    b"<html><main><p>Latest satellite imagery hurricane and cloud bands.</p>"
+                    b"</main></html>"))
+            if str(req.url) == bad_url:
+                return httpx.Response(302, headers={"location":"http://127.0.0.1/internal"})
+            return httpx.Response(403)
+        sources = [{"provider":"Official site discovery via Bing RSS","title":"NOAA Global Sea Level",
+                    "url":good_url,"snippet":"sea level ocean expansion","published":""},
+                   {"provider":"Official site discovery via Bing RSS","title":"Satellite imagery",
+                    "url":unrelated_url,"snippet":"sea level ocean expansion","published":""},
+                   {"provider":"Official site discovery via Bing RSS","title":"IPCC Sea Level",
+                    "url":bad_url,"snippet":"sea level ocean expansion","published":""}]
+        async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as client:
+            results = await enrich_with_read_excerpts(
+                "Compare NOAA NASA IPCC global sea level rise ocean thermal expansion land ice",
+                sources,client=client)
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(results[0]["url"],good_url)
+        self.assertEqual(results[0]["read_status"],"verified_page_excerpt")
+        self.assertIn("thermal expansion",results[0]["excerpt"])
+        self.assertTrue(all(x.get("read_status") != "verified_page_excerpt" for x in results[1:]))
+        self.assertEqual(len(results),3)
+
     def test_official_doc_selection_and_no_fabricated_page(self):
         self.assertEqual(recommended_official_docs("Python asyncio.Semaphore")[0]["url"], OFFICIAL_SEMAPHORE)
         self.assertEqual(recommended_official_docs("Weather tomorrow"), [])
