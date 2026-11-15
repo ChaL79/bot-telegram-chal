@@ -261,6 +261,8 @@ def source_relevance(item: dict, query_terms: list[str]) -> int:
     # Multi-institution accessibility questions should accept an article from
     # EACH named source: the MDN article need not literally say W3C and GOV.UK.
     accessibility_orgs = set(sought) & set(ACCESSIBILITY_SOURCE_HOSTS)
+    if {"gov", "uk"}.issubset(set(sought)):
+        accessibility_orgs.add("govuk")
     if len(accessibility_orgs) >= 2:
         matching_hosts = {
             ACCESSIBILITY_SOURCE_HOSTS[org] for org in accessibility_orgs
