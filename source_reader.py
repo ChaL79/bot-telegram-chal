@@ -242,9 +242,9 @@ def _privacy_terms_excerpt(text: str) -> str:
         return ""
     # Only these two H2s define the relevant sections. Optional escaped hashes
     # and link/anchor annotations are accepted; arbitrary matches are not.
-    heading = r"(?m)^\\?#{2}\s+{}\b[^\n]*$"
-    unpaid_match = re.search(heading.format("Unpaid Services"), text, re.I)
-    paid_match = re.search(heading.format("Paid Services"), text, re.I)
+    heading = lambda name: r"(?m)^\\?#{2}\s+" + re.escape(name) + r"\b[^\n]*$"
+    unpaid_match = re.search(heading("Unpaid Services"), text, re.I)
+    paid_match = re.search(heading("Paid Services"), text, re.I)
     if not unpaid_match or not paid_match or paid_match.start() <= unpaid_match.end():
         return ""
     unpaid_part = text[unpaid_match.end():paid_match.start()]
