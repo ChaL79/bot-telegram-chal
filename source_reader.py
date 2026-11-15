@@ -462,8 +462,9 @@ async def fetch_page_excerpt(
                 if current == GOOGLE_DOCS["api_terms"][0]:
                     excerpt = _privacy_terms_excerpt(page_text)
                 elif current == IDENTITY_DOCS[0][0]:
-                    excerpt = (_nist_binding_excerpt(page_text, question)
-                               or select_relevant_excerpt(page_text, question))
+                    targeted = _nist_binding_excerpt(page_text, question)
+                    log.info("NIST targeted evidence found=%s", bool(targeted))
+                    excerpt = targeted or select_relevant_excerpt(page_text, question)
                 else:
                     excerpt = select_relevant_excerpt(page_text, question)
                 if not excerpt:
@@ -534,6 +535,11 @@ async def enrich_with_read_excerpts(
 
     async def load(ref):
         focus = ref.get("focus", question)
+        if ref["url"] == IDENTITY_DOCS[0][0]:
+            # Technical NIST section extraction must see the user's actual
+            # binding/AAL3 question, not the static generic search focus.
+            # The fixed focus caused our targeted extractor never to run.
+            focus = question
         if (ref["url"] == GOOGLE_DOCS["studio_free"][0]
                 and any(model in question.casefold() for model, _ in _PRICING_MODEL_SECTIONS)):
             # The specific model ID must reach section extraction; the fixed
