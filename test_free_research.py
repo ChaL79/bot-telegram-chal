@@ -261,6 +261,45 @@ class FreeResearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("ipcc.ch", sources[2]["url"])
         self.assertTrue(all(item.get("read_status") is None for item in sources))
 
+    async def test_accessibility_discovery_uses_requested_organizations_only(self):
+        queries = []
+        def mock(req):
+            if req.url.host == "www.bing.com":
+                q = req.url.params.get("q", "")
+                queries.append(q)
+                host = ""
+                if q.startswith("site:www.w3.org "):
+                    host = "www.w3.org"
+                    path = "/TR/WCAG22/"
+                elif q.startswith("site:developer.mozilla.org "):
+                    host = "developer.mozilla.org"
+                    path = "/en-US/docs/Web/Accessibility/Keyboard"
+                elif q.startswith("site:www.gov.uk "):
+                    host = "www.gov.uk"
+                    path = "/service-manual/helping-people-to-use-your-service/testing-for-accessibility"
+                if host:
+                    xml = ("<rss><channel><item><title>WCAG keyboard focus accessibility</title>"
+                           "<link>https://" + host + path + "</link>"
+                           "<description>WCAG 2.2 keyboard focus visibility testing</description>"
+                           "</item></channel></rss>")
+                    return httpx.Response(200, content=xml.encode())
+                return httpx.Response(200, content=b"<rss><channel></channel></rss>")
+            if req.url.host == "en.wikipedia.org":
+                return httpx.Response(200, json={"query":{"search":[]}})
+            if req.url.host == "news.google.com":
+                return httpx.Response(200, content=b"<rss><channel></channel></rss>")
+            return httpx.Response(403)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as client:
+            result = await public_source_search(
+                "Compare W3C MDN Web Docs and GOV.UK WCAG 2.2 keyboard focus visibility testing",
+                client=client)
+        self.assertEqual(len(queries), 4, queries)
+        self.assertEqual(len(result), 3, result)
+        self.assertEqual(
+            [httpx.URL(item["url"]).host for item in result],
+            ["www.w3.org", "developer.mozilla.org", "www.gov.uk"])
+        self.assertTrue(all(item.get("excerpt") is None for item in result))
+
     async def test_provider_failure_fails_closed(self):
         async with httpx.AsyncClient(transport=httpx.MockTransport(
             lambda req: httpx.Response(403)
