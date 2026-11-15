@@ -63,7 +63,8 @@ TECH_KEYWORDS = frozenset({
     "python", "asyncio", "javascript", "typescript", "java", "rust", "golang",
     "github", "docker", "kubernetes", "api", "programming", "coding",
     "security", "cybersecurity", "linux", "regex", "sql", "algorithm",
-    "rate", "limiting", "semaphore", "token", "telegram", "bot", "llm",
+    "rate", "limiting", "limiter", "limit", "semaphore", "token", "telegram", "bot", "llm",
+    "aiolimiter", "async", "leaky", "bucket", "sliding", "window", "burst", "throttle", "throttling",
 })
 
 
