@@ -9,7 +9,7 @@ import html
 import logging
 import re
 from html.parser import HTMLParser
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urljoin
 from typing import Optional
 
 import httpx
@@ -19,7 +19,7 @@ log = logging.getLogger("source_reader")
 MAX_PAGE_BYTES = 450_000
 MAX_EXCERPT = 2400
 MAX_FETCHES = 3
-MAX_GOOGLE_FETCHES = 8  # fixed official documentation only, not general crawling
+MAX_GOOGLE_FETCHES = 9  # fixed official documentation only, not general crawling
 FETCH_TIMEOUT = 7.0
 
 OFFICIAL_ASYNCIO = "https://docs.python.org/3/library/asyncio.html"
@@ -31,6 +31,8 @@ AIOLIMITER_DOCS = "https://aiolimiter.readthedocs.io/en/stable/"
 GOOGLE_DOCS = {
     "gemini_available": ("https://support.google.com/gemini/answer/13575153",
                          "Gemini Apps supported countries", "Gemini web app supported countries Brunei"),
+    "gemini_overview": ("https://blog.google/innovation-and-ai/products/google-ai-updates-may-2025/",
+                        "Google Gemini app feature overview (June 2025)", "Gemini app Deep Research Canvas Gemini Live features"),
     "studio_start": ("https://ai.google.dev/gemini-api/docs/ai-studio-quickstart",
                      "Google AI Studio quickstart", "Google AI Studio prompt API models build"),
     "studio_free": ("https://ai.google.dev/gemini-api/docs/pricing",
@@ -41,8 +43,8 @@ GOOGLE_DOCS = {
                          "Google Antigravity individual pricing", "Antigravity free individual plan rate limits"),
     "notebook_rename": ("https://blog.google/innovation-and-ai/products/gemini-notebook/notebooklm-gemini-notebook/",
                         "Google NotebookLM renamed Gemini Notebook", "NotebookLM Gemini Notebook rename research"),
-    "flow_start": ("https://support.google.com/flow/answer/16353333",
-                   "Google Flow features and subscription requirements", "Google Flow video free daily credits"),
+    "flow_intro": ("https://blog.google/innovation-and-ai/products/google-flow-veo-ai-filmmaking-tool/",
+                    "Google Flow video creation overview (May 2025)", "Flow AI filmmaking Veo Imagen Gemini scenes video"),
     "flow_available": ("https://support.google.com/flow/answer/16353544",
                        "Google Flow supported countries", "Google Flow countries Brunei availability"),
 }
@@ -57,7 +59,7 @@ def google_official_docs(question: str) -> list[dict]:
         return []
     requested = []
     if "gemini" in q or "google ai" in q:
-        requested.append("gemini_available")
+        requested.extend(["gemini_overview", "gemini_available"])
     if "ai studio" in q or "aistudio" in q:
         requested.extend(["studio_start", "studio_free"])
     if "antigravity" in q:
@@ -65,7 +67,7 @@ def google_official_docs(question: str) -> list[dict]:
     if "notebooklm" in q or "notebook lm" in q or "gemini notebook" in q:
         requested.append("notebook_rename")
     if re.search(r"\bflow\b", q):
-        requested.extend(["flow_start", "flow_available"])
+        requested.extend(["flow_intro", "flow_available"])
     result = []
     for k in dict.fromkeys(requested):
         url, title, focus = GOOGLE_DOCS[k]
@@ -86,6 +88,13 @@ def is_approved_document_url(url: str) -> bool:
         host, path = p.hostname or "", p.path
         if url in GOOGLE_ALLOWED_URLS:
             return True
+        # Some Google developer docs canonicalize to an explicit English locale.
+        # Allow only that locale on an exactly approved ai.google.dev path.
+        if host == "ai.google.dev" and not p.fragment and p.query == "hl=en":
+            for base in GOOGLE_ALLOWED_URLS:
+                b = urlsplit(base)
+                if b.hostname == host and b.path.rstrip("/") == path.rstrip("/"):
+                    return True
         if host in ("support.google.com", "ai.google.dev", "antigravity.google", "blog.google"):
             return False
         if host == "docs.python.org":
@@ -178,31 +187,53 @@ async def fetch_page_excerpt(
         return ""
 
     async def execute(session: httpx.AsyncClient) -> str:
+        current = url
         try:
-            async with session.stream(
-                "GET", url, follow_redirects=False,
-                headers={"Accept": "text/html"}, timeout=FETCH_TIMEOUT,
-            ) as resp:
-                if resp.status_code != 200:
-                    log.info("Document excerpt unavailable host=%s status=%s",
-                             urlsplit(url).hostname, resp.status_code)
-                    return ""
-                mime = resp.headers.get("content-type", "").lower()
-                if "text/html" not in mime:
-                    return ""
-                length = resp.headers.get("content-length", "")
-                if length.isdecimal() and int(length) > MAX_PAGE_BYTES:
-                    return ""
-                buf = bytearray()
-                async for piece in resp.aiter_bytes():
-                    buf.extend(piece)
-                    if len(buf) > MAX_PAGE_BYTES:
+            # One checked same-host redirect at most. No client-wide redirects.
+            # Never follow to login, arbitrary Google Search, internal hosts, etc.
+            for attempt in range(2):
+                async with session.stream(
+                    "GET", current, follow_redirects=False,
+                    headers={"Accept": "text/html"}, timeout=FETCH_TIMEOUT,
+                ) as resp:
+                    if resp.status_code in (301, 302, 307, 308) and attempt == 0:
+                        location = resp.headers.get("location", "")
+                        target = urljoin(current, location)
+                        if (not location or not is_approved_document_url(target)
+                                or urlsplit(target).hostname != urlsplit(current).hostname
+                                or target == current):
+                            log.info("Document redirected to unapproved destination host=%s",
+                                     urlsplit(current).hostname)
+                            return ""
+                        current = target
+                        continue
+                    if resp.status_code != 200:
+                        log.info("Document excerpt unavailable host=%s status=%s",
+                                 urlsplit(current).hostname, resp.status_code)
                         return ""
-            parser = MainText()
-            parser.feed(buf.decode("utf-8", errors="replace"))
-            return select_relevant_excerpt(parser.content(), question)
+                    mime = resp.headers.get("content-type", "").lower()
+                    if "text/html" not in mime:
+                        log.info("Document excerpt rejected non-HTML host=%s",
+                                 urlsplit(current).hostname)
+                        return ""
+                    length = resp.headers.get("content-length", "")
+                    if length.isdecimal() and int(length) > MAX_PAGE_BYTES:
+                        return ""
+                    buf = bytearray()
+                    async for piece in resp.aiter_bytes():
+                        buf.extend(piece)
+                        if len(buf) > MAX_PAGE_BYTES:
+                            return ""
+                parser = MainText()
+                parser.feed(buf.decode("utf-8", errors="replace"))
+                excerpt = select_relevant_excerpt(parser.content(), question)
+                if not excerpt:
+                    log.info("Document excerpt no topical text host=%s",
+                             urlsplit(current).hostname)
+                return excerpt
+            return ""
         except (httpx.HTTPError, UnicodeError, ValueError):
-            log.info("Document excerpt request failed host=%s", urlsplit(url).hostname)
+            log.info("Document excerpt request failed host=%s", urlsplit(current).hostname)
             return ""
 
     if client is not None:
