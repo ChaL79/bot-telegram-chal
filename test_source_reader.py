@@ -588,6 +588,40 @@ No content on data practices.
         self.assertIn("non-exportable cryptographic keys are required at AAL3", excerpt)
         self.assertIn("syncable authenticators are inherently exportable", excerpt)
 
+    async def test_full_nist_question_reaches_targeted_section_not_static_focus(self):
+        from source_reader import IDENTITY_DOCS
+        requested = []
+        html = b"""<html><div class="container"><h1>NIST Authenticators</h1>
+        <p>An authentication protocol with channel binding SHALL establish
+        a protected channel with the verifier and strongly bind the channel identifier
+        to the authenticator output.</p>
+        <p>An authentication protocol with verifier name binding SHALL establish a
+        protected channel with the verifier and produce an authenticator output
+        cryptographically bound to a verifier identifier.</p>
+        <p>WebAuthn is used by FIDO2 authenticators and provides phishing resistance
+        through verifier name binding based on an authenticated domain.</p>
+        <p>Non-exportable authentication keys are considered more secure, and
+        non-exportable cryptographic keys are required at AAL3. The authentication
+        keys on syncable authenticators are inherently exportable.</p>
+        </div></html>"""
+        def mocked(req):
+            requested.append(str(req.url))
+            if str(req.url) == IDENTITY_DOCS[0][0]:
+                return httpx.Response(200, headers={"content-type":"text/html"}, content=html)
+            return httpx.Response(403)
+        question = ("Read official NIST SP 800-63B: compare channel binding and "
+                    "verifier name binding, explain WebAuthn FIDO2, and synced passkeys AAL3.")
+        async with httpx.AsyncClient(transport=httpx.MockTransport(mocked)) as client:
+            results = await enrich_with_read_excerpts(question, [], client=client)
+        self.assertIn(IDENTITY_DOCS[0][0], requested)
+        self.assertGreaterEqual(len(results), 1)
+        excerpt = results[0]["excerpt"]
+        self.assertIn("Channel Binding", excerpt)
+        self.assertIn("Verifier Name Binding", excerpt)
+        self.assertIn("WebAuthn", excerpt)
+        self.assertIn("AAL3 Key Exportability", excerpt)
+        self.assertIn("syncable authenticators are inherently exportable", excerpt.lower())
+
     def test_identity_research_selects_three_official_sources_without_general_crawl(self):
         from source_reader import IDENTITY_DOCS, identity_official_docs
         q = ("Conduct independent multi-source research comparing FIDO2 passkeys, "
