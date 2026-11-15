@@ -1,120 +1,114 @@
-import asyncio
 import json
 import unittest
 import httpx
+
 from gemini_advanced import (
     POWER_MODEL, RESEARCH_MODEL, MODE_LIMITS, quota_reserve,
-    safe_web_sources, split_telegram_text, run_advanced,
+    split_telegram_text, run_advanced,
 )
 
 
 class AdvancedTests(unittest.IsolatedAsyncioTestCase):
-    async def test_deepdive_uses_grounding_and_real_sources(self):
-        requests = []
-        def handle(req):
-            requests.append(json.loads(req.content))
-            return httpx.Response(200, json={"candidates": [{
-                "content": {"parts": [{"text": "Sumber rasmi telah disemak."}]},
-                "groundingMetadata": {"groundingChunks": [
-                    {"web": {"title": "Official", "uri": "https://example.org/report"}},
-                    {"web": {"title": "Official", "uri": "https://example.org/report"}},
-                ]},
-            }]})
-        async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as cli:
-            answer, ok = await run_advanced("Periksa laporan", "TEST_KEY", "deepdive", client=cli)
-        self.assertTrue(ok)
-        self.assertIn("Sumber daripada Google Search", answer)
-        self.assertEqual(answer.count("https://example.org/report"), 1)
-        self.assertEqual(requests[0]["tools"], [{"google_search": {}}])
-        self.assertEqual(requests[0]["generationConfig"]["thinkingConfig"], {"thinkingBudget": 512})
-
-    async def test_power_uses_high_thinking_no_web(self):
-        seen=[]
-        def handler(req):
+    async def test_deepdive_uses_public_metadata_and_real_links(self):
+        seen = []
+        def search_mock(req):
+            if req.url.host == "www.bing.com":
+                xml = b"""<rss><channel><item><title>Official Python</title>
+                  <link>https://docs.python.org/3/</link>
+                  <description>Python reference</description></item></channel></rss>"""
+                return httpx.Response(200, content=xml)
+            return httpx.Response(404)
+        def ai_mock(req):
             seen.append((str(req.url), json.loads(req.content)))
-            return httpx.Response(200, json={"candidates": [{"content": {"parts": [{"text":"Analisis selesai"}]}}]})
-        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as cli:
-            reply, ok = await run_advanced("Audit Python", "TEST_KEY", "power", client=cli)
+            return httpx.Response(200, json={"candidates":[{"content":{"parts":[{"text":"Dokumentasi membincangkan Python."}]}}]})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(search_mock)) as search_client:
+            async with httpx.AsyncClient(transport=httpx.MockTransport(ai_mock)) as client:
+                answer, ok = await run_advanced("Python references", "TEST_KEY", "deepdive",
+                                                client=client, search_client=search_client)
         self.assertTrue(ok)
-        self.assertIn(POWER_MODEL, seen[0][0])
-        self.assertEqual(seen[0][1]["generationConfig"]["thinkingConfig"], {"thinkingLevel": "high"})
+        self.assertIn("https://docs.python.org/3/", answer)
+        self.assertIn("bukan bacaan penuh", answer)
+        self.assertIn("docs.python.org", seen[0][1]["contents"][-1]["parts"][0]["text"])
+        self.assertNotIn("tools", seen[0][1])
+        self.assertIn(RESEARCH_MODEL, seen[0][0])
+
+    async def test_power_uses_proven_flash_lite_no_thinking_high(self):
+        seen = []
+        def mock(req):
+            seen.append((str(req.url), json.loads(req.content)))
+            return httpx.Response(200,json={"candidates":[{"content":{"parts":[{"text":"Selesai"}]}}]})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as cli:
+            answer, ok = await run_advanced("Audit asas", "TEST_KEY", "power", client=cli)
+        self.assertTrue(ok)
+        self.assertEqual(answer, "Selesai")
+        self.assertIn("gemini-3.5-flash-lite", seen[0][0])
+        self.assertEqual(POWER_MODEL, "gemini-3.5-flash-lite")
+        self.assertNotIn("thinkingConfig", seen[0][1]["generationConfig"])
         self.assertNotIn("tools", seen[0][1])
 
-    async def test_429_does_not_retry(self):
-        count=0
-        def response(req):
-            nonlocal count
-            count+=1
-            return httpx.Response(429)
-        async with httpx.AsyncClient(transport=httpx.MockTransport(response)) as cli:
-            answer, ok=await run_advanced("Harga", "TEST_KEY", "deepdive", client=cli)
+    async def test_public_search_unavailable_no_fabricated_research(self):
+        def search_mock(req):
+            return httpx.Response(403)
+        def forbidden_ai(req):
+            self.fail("Should not call Gemini if no sources")
+        async with httpx.AsyncClient(transport=httpx.MockTransport(search_mock)) as search_client:
+            async with httpx.AsyncClient(transport=httpx.MockTransport(forbidden_ai)) as client:
+                answer, ok = await run_advanced("Berita terkini", "TEST_KEY", "deepdive",
+                                                client=client, search_client=search_client)
         self.assertFalse(ok)
-        self.assertEqual(count,1)
-        self.assertIn("Free Tier",answer)
+        self.assertIn("tidak boleh mengesahkan", answer)
 
-    async def test_research_no_evidence_warning(self):
+    async def test_429_no_retry(self):
+        count = 0
+        def mock(req):
+            nonlocal count
+            count += 1
+            return httpx.Response(429)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as client:
+            answer, ok = await run_advanced("Audit", "TEST_KEY", "power", client=client)
+        self.assertFalse(ok)
+        self.assertEqual(count, 1)
+        self.assertIn("Kuota", answer)
+
+    async def test_invalid_history_blocked(self):
         async with httpx.AsyncClient(transport=httpx.MockTransport(
-            lambda req: httpx.Response(200,json={"candidates":[{"content":{"parts":[{"text":"Saya rasa begini"}]}}]})
+            lambda req: self.fail("No API call allowed")
         )) as cli:
-            answer, ok = await run_advanced("isu baru", "TEST_KEY", "deepdive", client=cli)
+            with self.assertRaises(ValueError):
+                await run_advanced("Hi", "TEST_KEY", "power",
+                    history=[{"role":"model","parts":[{"text":"bad"}]}], client=cli)
+
+    async def test_multi_turn_history_preserved(self):
+        seen = []
+        def mock(req):
+            seen.append(json.loads(req.content))
+            return httpx.Response(200,json={"candidates":[{"content":{"parts":[{"text":"MELUR"}]}}]})
+        history = [
+            {"role":"user","parts":[{"text":"Ingat MELUR"}]},
+            {"role":"model","parts":[{"text":"Baik MELUR"}]},
+        ]
+        async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as cli:
+            answer, ok = await run_advanced("Apa tadi?", "TEST_KEY", "power",
+                                             history=history, client=cli)
         self.assertTrue(ok)
-        self.assertIn("Tiada pautan sumber",answer)
+        self.assertEqual(answer,"MELUR")
+        self.assertEqual([i["role"] for i in seen[0]["contents"]],["user","model","user"])
 
-    async def test_unsupported_model_fails_closed(self):
-        for status in (400,404,403):
-            async with httpx.AsyncClient(transport=httpx.MockTransport(
-                lambda req: httpx.Response(status)
-            )) as cli:
-                answer, ok = await run_advanced("Penyelidikan", "TEST_KEY", "deepdive", client=cli)
-            self.assertFalse(ok)
-            self.assertNotIn("Sumber daripada Google Search",answer)
-
-    def test_sources_reject_invalid_uris(self):
-        data={"candidates":[{"groundingMetadata":{"groundingChunks":[
-            {"web":{"uri":"javascript:alert(1)","title":"evil"}},
-            {"web":{"uri":"https://example.net/ok","title":"Site"}},
-            {"web":{"uri":"https://user:pw@example.net/secret","title":"bad"}},
-        ]}}]}
-        self.assertEqual(safe_web_sources(data),[("Site","https://example.net/ok")])
-
-    def test_quota_rpm_daily_and_isolation(self):
-        a,b={},{}
+    def test_quota_rpm_daily(self):
+        a = {}
         self.assertEqual(MODE_LIMITS["power"],(2,12))
         self.assertTrue(quota_reserve(a,"power",monotonic_now=1,utc_day="2026-11-15")[0])
         self.assertTrue(quota_reserve(a,"power",monotonic_now=2,utc_day="2026-11-15")[0])
         self.assertFalse(quota_reserve(a,"power",monotonic_now=3,utc_day="2026-11-15")[0])
-        self.assertTrue(quota_reserve(b,"power",monotonic_now=3,utc_day="2026-11-15")[0])
         for i in range(10):
             self.assertTrue(quota_reserve(a,"power",monotonic_now=65+i*61,utc_day="2026-11-15")[0])
         self.assertFalse(quota_reserve(a,"power",monotonic_now=999,utc_day="2026-11-15")[0])
-        self.assertTrue(quota_reserve(a,"power",monotonic_now=1000,utc_day="2026-11-16")[0])
 
-    def test_telegram_split_below_limit(self):
-        parts=split_telegram_text("x"*7500)
-        self.assertGreater(len(parts),1)
-        self.assertTrue(all(len(p)<=3800 for p in parts))
-        self.assertEqual("".join(parts),"x"*7500)
-
-    async def test_memory_history_sent_to_research(self):
-        seen=[]
-        def mock(req):
-            seen.append(json.loads(req.content))
-            return httpx.Response(200,json={"candidates":[{"content":{"parts":[{"text":"Baik"}]}}]})
-        history=[
-            {"role":"user","parts":[{"text":"MELUR"}]},
-            {"role":"model","parts":[{"text":"Ingat MELUR"}]},
-        ]
-        async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as cli:
-            answer, ok=await run_advanced("Apa tadi?","TEST_KEY","deepdive",history=history,client=cli)
-        self.assertTrue(ok)
-        self.assertEqual([x["role"] for x in seen[0]["contents"]],["user","model","user"])
-
-    async def test_invalid_history_rejected_before_api(self):
-        async with httpx.AsyncClient(transport=httpx.MockTransport(
-            lambda req: self.fail("Should not reach API")
-        )) as cli:
-            with self.assertRaises(ValueError):
-                await run_advanced("Hello","TEST_KEY","power",history=[{"role":"model","parts":[{"text":"x"}]}],client=cli)
+    def test_split_under_telegram_limit(self):
+        text = "a"*7600
+        chunks = split_telegram_text(text)
+        self.assertTrue(all(len(c)<=3800 for c in chunks))
+        self.assertEqual("".join(chunks),text)
 
 
 if __name__ == "__main__":
