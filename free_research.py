@@ -408,8 +408,8 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
         accessibility_orgs = [
             name for name in ACCESSIBILITY_SOURCE_HOSTS
             if (name in ("w3c", "mdn") and re.search(
-                r"\\b" + re.escape(name) + r"\\b", mentioned
-            ) or name == "govuk" and re.search(r"\\bgov\\.?\\s*uk\\b", mentioned))
+                r"\b" + re.escape(name) + r"\b", mentioned
+            ) or name == "govuk" and re.search(r"\bgov\.?\s*uk\b", mentioned))
         ][:3]
         accessibility_subject = [
             word for word in terms if word in ACCESSIBILITY_TOPIC_WORDS
