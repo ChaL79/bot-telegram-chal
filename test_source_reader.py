@@ -116,7 +116,7 @@ class SourceReaderTests(unittest.IsolatedAsyncioTestCase):
         prompt = ("Deep dive compare Gemini AI Google AI Studio Google Antigravity "
                   "NotebookLM Google Flow available in Brunei free pricing")
         refs = google_official_docs(prompt)
-        self.assertEqual(len(refs), len(GOOGLE_DOCS) - 1)  # omit generic Gemini overview for comparison
+        self.assertEqual(len(refs), len(GOOGLE_DOCS) - 2)  # exclude generic overview and unrelated privacy terms
         self.assertTrue(all(x["provider"] == "Official Google documentation" for x in refs))
         self.assertTrue(all(x["url"].startswith("https://") for x in refs))
         self.assertEqual(google_official_docs("Python asyncio semaphore"), [])
