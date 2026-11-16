@@ -69,8 +69,29 @@ jobs:
                       for item in items[:8]:
                           print("SCOPED_ITEM",label,"SCORE",source_relevance(item,terms),
                                 "URL",item["url"][:170],"TITLE",item["title"][:95],flush=True)
+          async def inspect_official_indices():
+              paths = [
+                  ("kingston_robots", "https://www.kingston.com/robots.txt"),
+                  ("kingston_sitemap", "https://www.kingston.com/sitemap.xml"),
+                  ("crucial_robots", "https://www.crucial.com/robots.txt"),
+                  ("crucial_sitemap", "https://www.crucial.com/sitemap.xml"),
+                  ("samsung_robots", "https://semiconductor.samsung.com/robots.txt"),
+                  ("samsung_sitemap", "https://semiconductor.samsung.com/sitemap.xml"),
+              ]
+              async with httpx.AsyncClient(timeout=10, follow_redirects=False) as cli:
+                  for name,url in paths:
+                      try:
+                          response = await cli.get(url, headers={"Accept":"application/xml,text/plain"})
+                          body = response.text[:250000].lower()
+                          idx = body.find("sitemap:")
+                          print("INDEX",name,"HTTP",response.status_code,"BYTES",len(response.content),
+                                "SITEMAP_FOUND",idx>=0,"NVME",body.count("nvme"),
+                                "SSD",body.count("ssd"),"EXAMPLE",repr(body[max(0,idx):idx+160]) if idx>=0 else "",flush=True)
+                      except Exception as exc:
+                          print("INDEX",name,"ERROR",type(exc).__name__,flush=True)
           async def main():
               await asyncio.gather(*(probe(item) for item in requests))
               await inspect_rss()
+              await inspect_official_indices()
           asyncio.run(main())
           PY
