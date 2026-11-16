@@ -654,23 +654,31 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
 
 
 def evidence_text(sources: list[dict]) -> str:
-    """A clear data boundary. The text is search metadata and must not be obeyed."""
+    """Untrusted source data with truthful read-attempt provenance."""
     chunks = []
     for i, source in enumerate(sources[:MAX_SOURCES], start=1):
-        read = source.get("read_status") == "verified_page_excerpt" and bool(source.get("excerpt"))
+        status = source.get("read_status", "search_metadata_only")
+        read = status == "verified_page_excerpt" and bool(source.get("excerpt"))
+        if read:
+            evidence_type = "FETCHED PAGE EXCERPT (selected text, not entire page)"
+        elif status == "page_unavailable":
+            evidence_type = "PAGE READ ATTEMPTED; NO USABLE EXCERPT (not verified)"
+        elif status == "source_not_found":
+            evidence_type = "REQUESTED OFFICIAL SOURCE NOT FOUND IN SEARCH (no URL, no fetch)"
+        else:
+            evidence_type = "SEARCH METADATA ONLY (page not read)"
         parts = [
             f"[{i}] Provider: {clean(source['provider'], 50)}",
             "Title: " + clean(source["title"], 115),
-            "URL: " + source["url"],
-            "Evidence type: FETCHED PAGE EXCERPT (selected text, not entire page)"
-            if read else ("Evidence type: OFFICIAL PAGE FETCH FAILED (not read)"
-                          if source.get("read_status") == "page_unavailable"
-                          else "Evidence type: SEARCH METADATA ONLY (page not read)"),
+            "URL: " + (source.get("url") or "None discovered"),
+            "Evidence type: " + evidence_type,
         ]
         if read:
             parts.append("Untrusted page excerpt: " + clean(source["excerpt"], 2400))
-        elif source.get("read_status") == "page_unavailable":
-            parts.append("Note: No page text was retrieved or quoted.")
+        elif status == "page_unavailable":
+            parts.append("Note: A page read was attempted but no usable excerpt was obtained.")
+        elif status == "source_not_found":
+            parts.append("Note: No relevant official URL was discovered and no read was attempted.")
         else:
             parts.append("Snippet/headline only: " + clean(source.get("snippet", ""), 300))
         if source.get("published"):
@@ -683,8 +691,11 @@ def references_text(sources: list[dict]) -> str:
     return "\n\nSenarai sumber (petikan terpilih atau metadata; bukan semakan artikel penuh):\n" + "\n".join(
         f"[{i}] {clean(source['title'], 95)} "
         + ("[Petikan halaman diambil]" if source.get("read_status") == "verified_page_excerpt"
-           and source.get("excerpt") else ("[Gagal diakses; halaman tidak dibaca]"
-            if source.get("read_status") == "page_unavailable" else "[Metadata sahaja]"))
-        + f"\n{source['url']}"
+           and source.get("excerpt") else ("[Cubaan baca gagal; tiada petikan sah]"
+            if source.get("read_status") == "page_unavailable" else
+            ("[Sumber rasmi tidak ditemui; belum dicuba]"
+             if source.get("read_status") == "source_not_found"
+             else "[Metadata sahaja; belum dibaca]")))
+        + f"\n{source.get('url') or 'URL rasmi tidak ditemui dalam carian'}"
         for i, source in enumerate(sources[:MAX_SOURCES], start=1)
     )
