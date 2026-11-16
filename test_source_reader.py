@@ -855,6 +855,37 @@ No content on data practices.
         self.assertEqual(ssd_support_reference("SSD Kingston SATA", []), [])
         self.assertEqual(ssd_support_reference(q, refs), [])
 
+    async def test_single_samsung_and_ibm_uses_nvme_reference_not_latency(self):
+        from unittest.mock import patch
+        q = ("Bandingkan SSD NVMe PCIe dan SSD SATA berdasarkan sumber rasmi Samsung "
+             "serta rujukan teknikal IBM. Sertakan petikan maksimum 20 perkataan, "
+             "kelajuan, latency dan keserasian M.2.")
+        samsung = "https://semiconductor.samsung.com/consumer-storage/support/faqs/internalssd-product-information/"
+        refs = [{"title": "Samsung official SSD FAQ", "url": samsung,
+                 "provider": "Official sitemap", "snippet": "", "published": ""},
+                {"title": "What is latency? - IBM",
+                 "url": "https://www.ibm.com/think/topics/latency",
+                 "provider": "Bing RSS", "snippet": "Network latency", "published": ""}]
+        read_urls = []
+        async def fake_fetch(url, *, client=None):
+            read_urls.append(url)
+            if "nvme" in url:
+                return ("<html><body><p>IBM NVMe solid state drives use the PCIe "
+                        "interface instead of legacy SATA for faster data transfers.</p></body></html>")
+            if "samsung.com" in url:
+                return ("<html><main><p>Samsung NVMe SSDs using PCIe are faster "
+                        "than older SATA solid state drives.</p></main></html>")
+            return ("<html><main><p>Network latency measures delay for packets "
+                    "traveling over a network connection.</p></main></html>")
+        with patch.dict("os.environ", {"ENABLE_GENERAL_PUBLIC_READER": "1"}):
+            with patch("source_reader.read_public_html", side_effect=fake_fetch):
+                result = await enrich_with_read_excerpts(q, refs)
+        verified = [r for r in result if r.get("read_status") == "verified_page_excerpt"]
+        self.assertEqual({r["url"] for r in verified}, {
+            samsung, "https://www.ibm.com/think/topics/nvme"})
+        self.assertNotIn("https://www.ibm.com/think/topics/latency", read_urls)
+        self.assertEqual(len(read_urls), 2)
+
     def test_body_fallback_strictly_caps_untrusted_document_text(self):
         from source_reader import BoundedBodyText
         parser = BoundedBodyText()
