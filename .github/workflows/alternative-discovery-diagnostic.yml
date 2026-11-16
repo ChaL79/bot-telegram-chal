@@ -59,7 +59,10 @@ jobs:
                         ("samsung", "site:semiconductor.samsung.com ssd nvme pcie"),
                         ("kingston_short", "NVMe SATA Kingston"),
                         ("crucial_short", "NVMe SATA Crucial"),
-                        ("samsung_short", "NVMe SATA Samsung")]
+                        ("samsung_short", "NVMe SATA Samsung"),
+                        ("ibm_short", "NVMe SATA IBM"),
+                        ("cisco_short", "NVMe PCIe Cisco"),
+                        ("nvme_explainer", "what is NVMe SSD PCIe SATA")]
               async with httpx.AsyncClient(timeout=9) as cli:
                   for label, q in probes:
                       resp = await cli.get("https://www.bing.com/search",
