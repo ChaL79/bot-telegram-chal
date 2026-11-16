@@ -202,6 +202,50 @@ class FreeResearchTests(unittest.IsolatedAsyncioTestCase):
                     "https://example.org/resources/../../private"):
             self.assertEqual(readable_article_priority({"url": url}), 0)
 
+    async def test_ssd_brand_scoped_discovery_and_selection(self):
+        from free_research import requested_product_institutions
+        question = ("Bandingkan SSD NVMe PCIe dengan SSD SATA berdasarkan "
+                    "dokumentasi rasmi Kingston, Crucial dan Samsung.")
+        self.assertEqual(requested_product_institutions(question),
+                         ["kingston", "crucial", "samsung"])
+        seen = []
+        def mock(req):
+            query = str(req.url.params.get("q", ""))
+            seen.append(query)
+            if query.startswith("site:www.kingston.com"):
+                return httpx.Response(200, content=b"""<rss><channel><item>
+                  <title>NVMe vs SATA SSDs Kingston</title>
+                  <link>https://www.kingston.com/en/blog/pc-performance/nvme-vs-sata</link>
+                  <description>SSD NVMe PCIe performance versus SATA</description>
+                  </item><item><title>Fake offsite Kingston SSD</title>
+                  <link>https://evil.example/kingston/ssd</link>
+                  <description>NVMe SATA</description></item></channel></rss>""")
+            if query.startswith("site:www.crucial.com"):
+                return httpx.Response(200, content=b"""<rss><channel><item>
+                  <title>Crucial SSD SATA and NVMe</title>
+                  <link>https://www.crucial.com/articles/about-ssd/nvme-vs-sata</link>
+                  <description>NVMe PCIe and SATA SSD interface</description>
+                  </item></channel></rss>""")
+            if query.startswith("site:semiconductor.samsung.com"):
+                return httpx.Response(200, content=b"""<rss><channel><item>
+                  <title>Samsung NVMe SSD SATA product guide</title>
+                  <link>https://semiconductor.samsung.com/consumer-storage/support/faqs/internalssd-product-information/</link>
+                  <description>NVMe PCIe SSD SATA performance</description>
+                  </item></channel></rss>""")
+            return httpx.Response(403)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as client:
+            found = await public_source_search(question, client=client)
+        self.assertEqual(len([q for q in seen if q.startswith("site:")]), 3)
+        hosts = {httpx.URL(item["url"]).host for item in found[:3]}
+        self.assertEqual(hosts, {"www.kingston.com", "www.crucial.com",
+                                 "semiconductor.samsung.com"})
+        self.assertFalse(any("evil.example" in item["url"] for item in found))
+
+    def test_brand_scoping_not_used_for_unrelated_questions(self):
+        from free_research import requested_product_institutions
+        self.assertEqual(requested_product_institutions("Python asyncio semaphore"), [])
+        self.assertEqual(requested_product_institutions("Kingston SSD specs"), ["kingston"])
+
     def test_long_multisource_question_finds_security_subject_not_conduct(self):
         q = ("Conduct independent, multi-source cybersecurity research as of 15 November 2026. "
              "Compare three account authentication methods: FIDO2 passkeys, authenticator-app "
