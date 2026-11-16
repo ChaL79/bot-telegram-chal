@@ -1,0 +1,53 @@
+name: SSD official research live acceptance
+on:
+  pull_request:
+    paths:
+      - 'free_research.py'
+      - 'test_free_research.py'
+      - '.github/workflows/ssd-official-live.yml'
+permissions:
+  contents: read
+jobs:
+  ssd-official-live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements.txt
+      - name: Check original SSD task using actual public search and safe read
+        env:
+          ENABLE_GENERAL_PUBLIC_READER: '1'
+        run: |
+          python - <<'PY'
+          import asyncio
+          from urllib.parse import urlsplit
+          from free_research import public_source_search
+          from source_reader import enrich_with_read_excerpts
+          q = ("Bandingkan SSD NVMe PCIe dengan SSD SATA berdasarkan dokumentasi rasmi "
+               "Kingston, Crucial dan Samsung. Terangkan kelajuan, latency, keserasian "
+               "slot M.2, serta manfaat sebenar menaik taraf laptop lama. Cari dan baca "
+               "halaman HTML sebenar daripada sekurang-kurangnya dua domain berbeza.")
+          hosts = {"www.kingston.com", "www.crucial.com", "semiconductor.samsung.com"}
+          async def main():
+              found = await public_source_search(q)
+              official = [s for s in found if urlsplit(s.get("url", "")).hostname in hosts]
+              print("SELECTED", len(found), "OFFICIAL_URLS", len(official), flush=True)
+              for s in found:
+                  print("FOUND", urlsplit(s["url"]).hostname, s["url"], flush=True)
+              evidence = await enrich_with_read_excerpts(q, found)
+              verified = [s for s in evidence if s.get("read_status") == "verified_page_excerpt"]
+              for item in evidence:
+                  print("EVIDENCE", item.get("read_status"), item.get("url"), flush=True)
+              valid = {urlsplit(s["url"]).hostname for s in verified}
+              print("VERIFIED_DOMAINS", sorted(valid), flush=True)
+              if len(valid) < 2:
+                  raise AssertionError("Fewer than two independently discovered pages yielded a genuine excerpt")
+              if not any(host in valid for host in hosts):
+                  raise AssertionError("No requested manufacturer produced a verified page excerpt")
+          asyncio.run(main())
+          PY
