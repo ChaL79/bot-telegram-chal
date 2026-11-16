@@ -265,6 +265,25 @@ class FreeResearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(any("evil.example" in x["url"] or "127.0.0.1" in x["url"] for x in sources))
         self.assertTrue(all("excerpt" not in x for x in sources))
 
+    async def test_official_multi_brand_research_excludes_retail_offers(self):
+        from free_research import is_marketplace_listing
+        self.assertTrue(is_marketplace_listing(
+            "https://computers.woot.com/offers/samsung-ssd"))
+        self.assertFalse(is_marketplace_listing(
+            "https://semiconductor.samsung.com/consumer-storage/support/faqs/internalssd-product-information/"))
+        rss = b"""<rss><channel><item><title>Samsung 960 EVO NVMe SATA SSD - Woot</title>
+                  <link>https://www.woot.com/offers/samsung-960-evo-nvme-m-2-ssd-1tb-0</link>
+                  <description>NVMe SATA SSD</description></item></channel></rss>"""
+        question = ("Bandingkan SSD NVMe PCIe dengan SSD SATA berdasarkan "
+                    "dokumentasi rasmi Kingston Crucial Samsung.")
+        def mock(req):
+            if req.url.host == "www.bing.com":
+                return httpx.Response(200,content=rss)
+            return httpx.Response(403)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as client:
+            found = await public_source_search(question,client=client)
+        self.assertFalse(any("woot.com" in x["url"] for x in found))
+
     def test_brand_scoping_not_used_for_unrelated_questions(self):
         from free_research import requested_product_institutions
         self.assertEqual(requested_product_institutions("Python asyncio semaphore"), [])
