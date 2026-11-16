@@ -89,9 +89,31 @@ jobs:
                                 "SSD",body.count("ssd"),"EXAMPLE",repr(body[max(0,idx):idx+160]) if idx>=0 else "",flush=True)
                       except Exception as exc:
                           print("INDEX",name,"ERROR",type(exc).__name__,flush=True)
+          async def inspect_sitemap_articles():
+              import xml.etree.ElementTree as ET
+              targets = [("kingston","https://www.kingston.com/siteindex.xml"),
+                         ("samsung","https://semiconductor.samsung.com/sitemap.xml")]
+              async with httpx.AsyncClient(timeout=12,follow_redirects=False) as cli:
+                  for name,url in targets:
+                      try:
+                          response = await cli.get(url)
+                          print("INDEX_TARGET",name,"HTTP",response.status_code,
+                                "BYTES",len(response.content),flush=True)
+                          if response.status_code != 200 or len(response.content)>450000:
+                              continue
+                          root=ET.fromstring(response.content)
+                          links=[node.text or "" for node in root.iter() if node.tag.endswith("loc")]
+                          filtered=[u for u in links if any(w in u.casefold() for w in
+                                    ("nvme","sata","solid-state","consumer-storage","ssd"))]
+                          print("INDEX_URLS",name,"TOTAL",len(links),"MATCHES",len(filtered),flush=True)
+                          for u in filtered[:12]:
+                              print("INDEX_URL",name,u[:190],flush=True)
+                      except Exception as exc:
+                          print("INDEX_TARGET",name,"ERROR",type(exc).__name__,flush=True)
           async def main():
               await asyncio.gather(*(probe(item) for item in requests))
               await inspect_rss()
               await inspect_official_indices()
+              await inspect_sitemap_articles()
           asyncio.run(main())
           PY
