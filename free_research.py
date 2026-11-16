@@ -125,8 +125,30 @@ QUERY_FILLER = frozenset({
     "dua", "tiga", "berbeza", "setiap", "halaman", "berjaya",
     "asingkan", "metadata", "sahaja", "gagal", "diakses", "jangan",
     "reka", "keputusan", "ujian", "petikan",
+    "bagi", "mereka", "amerika", "syarikat", "united", "kingdom",
+    "penjelasan", "cadangan", "kesannya", "dalamnya",
 })
 
+
+# Bilingual, bounded concept matching for English-language official pages.
+# Maps Malay subject terms only; it does not translate entire user documents,
+# issue paid model calls, or bypass any relevance/security check.
+MALAY_RESEARCH_TERMS = {
+    "pengurusan": "management",
+    "keletihan": "fatigue",
+    "pekerja": "workers",
+    "kerja": "work",
+    "syif": "shift",
+    "tidur": "sleep",
+    "kekurangan": "lack",
+    "keselamatan": "safety",
+    "risiko": "risk",
+    "pencegahan": "prevention",
+    "malam": "night",
+    "kemalangan": "accidents",
+    "kecederaan": "injuries",
+    "kesihatan": "health",
+}
 
 def _terms(value: str) -> list[str]:
     # Keep hyphenated product names and their version as one search concept.
@@ -158,6 +180,8 @@ TOPIC_ANCHORS = frozenset({
     "obscured", "w3c", "mdn", "govuk",
     # Cross-domain consumer/technical research; not a vendor URL allowlist.
     "wifi7", "wifi6", "wifi", "mlo", "6ghz", "latency", "multilink",
+    # Occupational safety: keep the subject, not Malay task scaffolding, first.
+    "fatigue", "shift", "work", "sleep", "cdc", "niosh", "hse",
 })
 IDENTITY_ANCHORS = frozenset({
     "passkeys", "passkey", "fido2", "totp", "mfa", "otp", "phishing",
@@ -169,7 +193,8 @@ def search_query_terms(request: str) -> list[str]:
     """Extract relevant terms across a complete question; no LLM, no extra API."""
     request = clean(request, 2800)
     request = re.sub(r"^/(?:deepdive|power)\b\s*", "", request, flags=re.I)
-    words = [x for x in _terms(request) if not x.isdecimal()]
+    words = [MALAY_RESEARCH_TERMS.get(x, x) for x in _terms(request)
+             if not x.isdecimal()]
     anchors = []
     for word in words:
         if word in TOPIC_ANCHORS and word not in anchors:
