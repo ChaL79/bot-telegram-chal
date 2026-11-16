@@ -172,6 +172,36 @@ class FreeResearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Wi-Fi 7", result[0]["title"])
         self.assertIn("wifi7", received[0])
 
+    def test_direct_article_urls_rank_above_news_redirects_and_marketing(self):
+        from free_research import prioritize_readable_sources, readable_article_priority
+        refs = [
+            {"url": "https://news.google.com/rss/articles/article?oc=5",
+             "title": "Research news index"},
+            {"url": "https://www.tp-link.com/us/wifi7/",
+             "title": "WiFi 7 marketing landing page"},
+            {"url": "https://www.intel.com/content/www/us/en/products/details/wireless/wi-fi-7-series.html",
+             "title": "Intel Wi-Fi 7 reference"},
+            {"url": "https://www.spectrum.com/resources/internet-wifi/what-is-wifi-7",
+             "title": "Spectrum Wi-Fi 7 article"},
+            {"url": "https://www.highspeedinternet.com/resources/what-is-wi-fi-7",
+             "title": "Wi-Fi 7 article"},
+        ]
+        ranked = prioritize_readable_sources([(10, r) for r in refs])
+        chosen = [x["url"] for _score, x in ranked[:3]]
+        self.assertEqual(set(chosen), {refs[2]["url"], refs[3]["url"], refs[4]["url"]})
+        self.assertEqual(readable_article_priority(refs[0]), 0)
+        self.assertGreater(readable_article_priority(refs[2]),
+                           readable_article_priority(refs[1]))
+
+    def test_priority_does_not_bypass_safe_url_checks(self):
+        from free_research import readable_article_priority
+        for url in ("http://www.intel.com/en/articles/wifi7",
+                    "https://127.0.0.1/resource/wifi7.html",
+                    "https://example.org/docs/article?api_key=secret",
+                    "https://evil.local/resources/wifi7.html",
+                    "https://example.org/resources/../../private"):
+            self.assertEqual(readable_article_priority({"url": url}), 0)
+
     def test_long_multisource_question_finds_security_subject_not_conduct(self):
         q = ("Conduct independent, multi-source cybersecurity research as of 15 November 2026. "
              "Compare three account authentication methods: FIDO2 passkeys, authenticator-app "
