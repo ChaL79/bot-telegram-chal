@@ -750,6 +750,73 @@ No content on data practices.
         self.assertTrue(all(x.get("read_status") != "verified_page_excerpt" for x in results[1:]))
         self.assertEqual(len(results),3)
 
+    async def test_wifi_named_official_sources_distinguish_missing_attempted_and_metadata(self):
+        from unittest.mock import patch
+        from source_reader import missing_named_official_sites
+        from public_article_reader import safe_public_article_url
+        question = ("Audit sumber rasmi Wi-Fi 7 daripada Wi-Fi Alliance, "
+                    "Intel dan TP-Link. Sertakan sumber yang dibaca.")
+        refs = [
+            {"provider": "Bing RSS", "title": "Intel Wi-Fi 7",
+             "url": "https://www.intel.com/content/www/us/en/products/details/wireless/wi-fi-7-series.html",
+             "snippet": "", "published": ""},
+            {"provider": "Bing RSS", "title": "TP-Link Wi-Fi 7",
+             "url": "https://www.tp-link.com/us/wifi7/", "snippet": "", "published": ""},
+            {"provider": "Bing RSS", "title": "Wi-Fi 7 review",
+             "url": "https://www.wired.com/story/what-is-wi-fi-7/",
+             "snippet": "Review", "published": ""},
+        ]
+        missing = missing_named_official_sites(question, refs)
+        self.assertEqual([x["title"] for x in missing], ["Wi-Fi Alliance"])
+        self.assertEqual(missing[0]["url"], "")
+        self.assertEqual(missing[0]["read_status"], "source_not_found")
+        fetched = []
+        async def mock_fetch(url, *, client=None):
+            fetched.append(url)
+            if "intel.com" in url:
+                return ("<html><main><p>Intel Wi-Fi 7 technology supports multi-link "
+                        "operation, lower latency and faster wireless speeds.</p></main></html>")
+            return ""
+        with patch.dict("os.environ", {"ENABLE_GENERAL_PUBLIC_READER": "1"}):
+            with patch("source_reader.read_public_html", side_effect=mock_fetch):
+                result = await enrich_with_read_excerpts(question, refs)
+        self.assertEqual(len(fetched), 3)
+        status = {x["title"]: x["read_status"] for x in result}
+        self.assertEqual(status["Intel Wi-Fi 7"], "verified_page_excerpt")
+        self.assertEqual(status["Wi-Fi Alliance"], "source_not_found")
+        self.assertEqual(status["TP-Link Wi-Fi 7"], "page_unavailable")
+        self.assertEqual(status["Wi-Fi 7 review"], "page_unavailable")
+        self.assertIn("REQUESTED OFFICIAL SOURCE NOT FOUND", evidence_text(result))
+        self.assertIn("[Sumber rasmi tidak ditemui; belum dicuba]", references_text(result))
+        self.assertIn("[Cubaan baca gagal; tiada petikan sah]", references_text(result))
+
+    async def test_wifi_unattempted_search_result_stays_metadata_only(self):
+        from unittest.mock import patch
+        question = "Bandingkan Wi-Fi 7 dan Wi-Fi 6."
+        hosts = ["intel.com", "spectrum.com", "highspeedinternet.com", "wired.com"]
+        refs = [{"provider": "Bing RSS", "title": "Wi-Fi 7 " + host,
+                 "url": "https://" + host + "/resources/wifi7",
+                 "snippet": "", "published": ""} for host in hosts]
+        seen = []
+        async def unreadable(url, *, client=None):
+            seen.append(url)
+            return ""
+        with patch.dict("os.environ", {"ENABLE_GENERAL_PUBLIC_READER": "1"}):
+            with patch("source_reader.read_public_html", side_effect=unreadable):
+                result = await enrich_with_read_excerpts(question, refs)
+        self.assertEqual(len(seen), 3)
+        self.assertEqual([r["read_status"] for r in result].count("page_unavailable"), 3)
+        self.assertEqual([r["read_status"] for r in result].count("search_metadata_only"), 1)
+        self.assertTrue(all(r.get("excerpt") is None for r in result))
+
+    def test_named_official_source_not_found_is_not_general_web_guess(self):
+        from source_reader import missing_named_official_sites
+        self.assertEqual(missing_named_official_sites("Compare Python asyncio", []), [])
+        self.assertEqual(missing_named_official_sites("Wi-Fi 7 tips", []), [])
+        requested = missing_named_official_sites("Wi-Fi 7 Intel and TP-Link", [])
+        self.assertEqual({r["title"] for r in requested}, {"Intel", "TP-Link"})
+        self.assertTrue(all(not r["url"] for r in requested))
+
     def test_official_doc_selection_and_no_fabricated_page(self):
         self.assertEqual(recommended_official_docs("Python asyncio.Semaphore")[0]["url"], OFFICIAL_SEMAPHORE)
         self.assertEqual(recommended_official_docs("Weather tomorrow"), [])
