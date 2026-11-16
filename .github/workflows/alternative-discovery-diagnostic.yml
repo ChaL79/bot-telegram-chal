@@ -47,7 +47,28 @@ jobs:
                             "HAS_NVME",body.lower().count("nvme"),flush=True)
               except Exception as exc:
                   print("PROBE",tag,"ERROR",type(exc).__name__,flush=True)
+          from free_research import parse_rss, source_relevance, search_query_terms, requested_product_institutions
+          question = ("Bandingkan SSD NVMe PCIe dengan SSD SATA berdasarkan dokumentasi rasmi "
+                      "Kingston, Crucial dan Samsung. Terangkan kelajuan, latency, keserasian "
+                      "slot M.2, serta manfaat sebenar menaik taraf laptop lama.")
+          async def inspect_rss():
+              terms = search_query_terms(question)
+              print("SSD_TERMS", terms, "PRODUCTS", requested_product_institutions(question), flush=True)
+              probes = [("kingston", "site:www.kingston.com ssd nvme pcie"),
+                        ("crucial", "site:www.crucial.com ssd nvme pcie"),
+                        ("samsung", "site:semiconductor.samsung.com ssd nvme pcie"),
+                        ("kingston_short", "NVMe SATA Kingston")]
+              async with httpx.AsyncClient(timeout=9) as cli:
+                  for label, q in probes:
+                      resp = await cli.get("https://www.bing.com/search",
+                                           params={"q":q,"format":"rss","mkt":"en-US"})
+                      items = parse_rss(resp.content,"diagnostic",10) if resp.status_code==200 else []
+                      print("SCOPED_RSS",label,"HTTP",resp.status_code,"COUNT",len(items),flush=True)
+                      for item in items[:8]:
+                          print("SCOPED_ITEM",label,"SCORE",source_relevance(item,terms),
+                                "URL",item["url"][:170],"TITLE",item["title"][:95],flush=True)
           async def main():
               await asyncio.gather(*(probe(item) for item in requests))
+              await inspect_rss()
           asyncio.run(main())
           PY
