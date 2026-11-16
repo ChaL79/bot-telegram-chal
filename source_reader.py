@@ -750,6 +750,11 @@ def wifi7_comparison_recovery(question: str, sources: list[dict]) -> list[dict]:
         return []
     # No fabricated pages; this is a reviewed recovery reference, not a claim
     # that a website is currently accessible or its content has been read.
+    # Preserve real search candidates whenever a previously readable
+    # comparison domain is already present; do not displace them with recovery.
+    known_hosts = {urlsplit(url).hostname for url, _ in WIFI7_COMPARISON_DOCS}
+    if any(urlsplit(ref.get("url", "")).hostname in known_hosts for ref in sources):
+        return []
     discovered = {ref.get("url") for ref in sources}
     return [{"provider": "Reviewed Wi-Fi comparison page (not yet read)",
              "title": title, "url": url, "snippet": "", "published": ""}
