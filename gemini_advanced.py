@@ -8,6 +8,7 @@ No paid-tier activation, retries, or arbitrary URL fetching.
 """
 import datetime as dt
 import logging
+import re
 import time
 from collections import deque
 from typing import Optional
@@ -43,6 +44,10 @@ RESEARCH_PROMPT = (
     "sah; search_metadata_only ialah URL ditemui tetapi halaman belum dicuba; "
     "source_not_found ialah organisasi diminta tetapi URL tidak ditemui, maka tiada "
     "cubaan baca dibuat. Jangan menyamakan tidak ditemui dengan gagal diakses. "
+    "Jangan hasilkan petikan langsung, blokquote, atau seksyen petikan/status sumber. "
+    "Jangan letak kata-kata bersumber dalam tanda petik, kerana aplikasi sendiri "
+    "akan memaparkan petikan sebenar daripada setiap halaman yang dibaca. "
+    "Tulis analisis menggunakan parafrasa dan rujukan nombor sahaja. "
     "Ringkaskan dapatan, bandingkan sumber yang ada, dan beri langkah semakan selanjutnya. "
     "Jangan buat transaksi, ubah kod, deploy atau menghantar mesej luaran."
 )
@@ -137,6 +142,55 @@ def _verified_history(history: Optional[list]) -> list[dict]:
     return out
 
 
+def verified_source_quotes(sources: list[dict], *, limit_words: int = 20) -> str:
+    """Create verbatim quotes by copying ONLY from each verified excerpt.
+
+    Never rely on the generative model to produce or attribute source quotes.
+    Each quote is from one visible excerpt line, not stitched across pages.
+    """
+    if not 1 <= limit_words <= 20:
+        raise ValueError("limit_words must be 1..20")
+    lines = []
+    for number, source in enumerate(sources[:8], 1):
+        if (source.get("read_status") != "verified_page_excerpt"
+                or not isinstance(source.get("excerpt"), str)):
+            continue
+        candidates = [" ".join(line.split()) for line in source["excerpt"].splitlines()]
+        # A complete source line is preferable to a partial navigation fragment.
+        selected = next((line for line in candidates if len(line.split()) >= 6), "")
+        if not selected:
+            continue
+        quote = " ".join(selected.split()[:limit_words])
+        if not quote:
+            continue
+        title = str(source.get("title", ""))[:95].replace("\n", " ")
+        url = str(source.get("url", ""))
+        lines.append(f'[{number}] {title}\nURL: {url}\nPetikan disahkan: "{quote}"')
+    if not lines:
+        return ""
+    return ("\n\nPetikan asli disahkan secara automatik daripada halaman yang dibaca "
+            "(maksimum 20 perkataan setiap sumber):\n" + "\n\n".join(lines))
+
+
+def suppress_model_quotes(answer: str) -> str:
+    """Exclude model-authored direct quotes; deterministic quotes appear later.
+
+    We cannot trust the model to say whether its quote comes from source [1]
+    or [2], even when the words are somewhere in the context.
+    """
+    # Markdown quotations are untrusted model-authored content, not the page text.
+    answer = re.sub(r"(?m)^[ \t]*>[^\n]*(?:\n|$)", "", answer)
+    # Remove quoted strings (straight/curly) long enough to be a source claim.
+    answer = re.sub(r'["“][^"\n”]{20,}["”]',
+                    "[petikan tersedia dalam seksyen disahkan di bawah]", answer)
+    # Some replies put purported quotes on a labeled line without quote marks.
+    answer = re.sub(
+        r"(?im)^\s*(?:[-*]\s*)?(?:\*\*)?"
+        r"(?:petikan asli|petikan langsung|direct quote|verbatim quote)"
+        r"(?:\*\*)?\s*[:\-][^\n]*$", "", answer)
+    return re.sub(r"\n{3,}", "\n\n", answer).strip()
+
+
 def research_fallback(sources: list[dict], reason: str) -> str:
     """Expose previously obtained sources if text generation is unavailable.
 
@@ -152,11 +206,13 @@ def research_fallback(sources: list[dict], reason: str) -> str:
         title = str(source.get("title", ""))[:100]
         url = str(source.get("url", ""))
         if source.get("read_status") == "verified_page_excerpt" and source.get("excerpt"):
-            excerpt = " ".join(str(source["excerpt"]).split())[:550]
             label = "Petikan halaman diambil"
-            lines.append(f"[{i}] {title} [{label}]\n{url}\nPetikan: {excerpt}")
+            lines.append(f"[{i}] {title} [{label}]\n{url}")
         else:
             lines.append(f"[{i}] {title} [Metadata carian sahaja]\n{url}")
+    quotes = verified_source_quotes(sources[:5])
+    if quotes:
+        lines.append(quotes)
     lines.append("Sila semak sumber secara langsung; cuba /deepdive semula apabila Gemini tersedia.")
     return "\n\n".join(lines)[:7600]
 
@@ -262,10 +318,13 @@ async def run_advanced(
         if not research:
             return answer[:7500], True
         reference_text = references_text(sources)
+        quote_text = verified_source_quotes(sources)
+        narrative = suppress_model_quotes(answer)
         return (
             "Penyelidikan berdasarkan petikan halaman terpilih dan metadata carian. "
             "Tidak semestinya membaca artikel penuh:\n\n"
-            + answer[:max(1500, 10000 - len(reference_text))] + reference_text,
+            + narrative[:max(1500, 10000 - len(reference_text) - len(quote_text))]
+            + quote_text + reference_text,
             True,
         )
 
