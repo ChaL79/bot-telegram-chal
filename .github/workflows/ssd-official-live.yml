@@ -55,3 +55,36 @@ jobs:
                   raise AssertionError("No requested manufacturer produced a verified page excerpt")
           asyncio.run(main())
           PY
+      - name: Verify single Samsung manufacturer plus IBM support source
+        env:
+          ENABLE_GENERAL_PUBLIC_READER: '1'
+        run: |
+          python - <<'PY'
+          import asyncio
+          from urllib.parse import urlsplit
+          from free_research import public_source_search
+          from source_reader import enrich_with_read_excerpts
+          q = ("Bandingkan SSD NVMe PCIe dan SSD SATA berdasarkan sumber rasmi Samsung "
+               "serta rujukan teknikal IBM. Sertakan petikan asli maksimum 20 perkataan "
+               "bagi setiap sumber yang benar-benar dibaca. Pastikan petikan IBM hanya "
+               "daripada halaman IBM dan petikan Samsung hanya daripada halaman Samsung. "
+               "Sertakan status sumber, URL, nombor rujukan, kelajuan, latency dan keserasian M.2.")
+          async def main():
+              found = await public_source_search(q)
+              print("SINGLE_SSD_FOUND",len(found),flush=True)
+              for r in found:
+                  print("SINGLE_SSD_URL",r["url"],flush=True)
+              enriched = await enrich_with_read_excerpts(q,found)
+              verified = [r for r in enriched if r.get("read_status") == "verified_page_excerpt"]
+              for r in enriched:
+                  print("SINGLE_SSD_STATUS",r["read_status"],r.get("url"),flush=True)
+              found_hosts = {urlsplit(r["url"]).hostname for r in verified}
+              required = {"semiconductor.samsung.com","www.ibm.com"}
+              print("SINGLE_SSD_VERIFIED_HOSTS",sorted(found_hosts),flush=True)
+              if not required.issubset(found_hosts):
+                  raise AssertionError("Required official Samsung and technical IBM NVMe source excerpts missing")
+              ibm = next(r for r in verified if urlsplit(r["url"]).hostname == "www.ibm.com")
+              if "/topics/nvme" not in ibm["url"]:
+                  raise AssertionError("Unrelated IBM article substituted for NVMe")
+          asyncio.run(main())
+          PY
