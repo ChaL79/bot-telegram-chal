@@ -44,9 +44,13 @@ jobs:
               for item in evidence:
                   print("EVIDENCE", item.get("read_status"), item.get("url"), flush=True)
               valid = {urlsplit(s["url"]).hostname for s in verified}
+              # Hostnames such as www.woot.com and computers.woot.com belong
+              # to ONE registrable organization, not two independent domains.
+              independent = {".".join(h.split(".")[-2:]) for h in valid}
               print("VERIFIED_DOMAINS", sorted(valid), flush=True)
-              if len(valid) < 2:
-                  raise AssertionError("Fewer than two independently discovered pages yielded a genuine excerpt")
+              print("INDEPENDENT_ORGANIZATIONS", sorted(independent), flush=True)
+              if len(independent) < 2:
+                  raise AssertionError("Fewer than two independent domains yielded a genuine excerpt")
               if not any(host in valid for host in hosts):
                   raise AssertionError("No requested manufacturer produced a verified page excerpt")
           asyncio.run(main())
