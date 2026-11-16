@@ -45,6 +45,19 @@ ACCESSIBILITY_SOURCE_HOSTS = {
     "mdn": "developer.mozilla.org",
     "govuk": "www.gov.uk",
 }
+# Reviewed domains for explicit brand-scoped discovery; no article URLs guessed.
+PRODUCT_OFFICIAL_DOMAINS = {
+    "kingston": ("www.kingston.com",),
+    "crucial": ("www.crucial.com",),
+    "samsung": ("semiconductor.samsung.com",),
+}
+
+
+def requested_product_institutions(question: str) -> list[str]:
+    return [name for name in PRODUCT_OFFICIAL_DOMAINS
+            if re.search(r"\\b" + re.escape(name) + r"\\b", question, re.I)][:3]
+
+
 ACCESSIBILITY_TOPIC_WORDS = frozenset({
     "wcag", "accessibility", "accessible", "keyboard", "focus",
     "visibility", "visible", "obscured", "testing", "test",
@@ -427,9 +440,10 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
     if not terms:
         return []
     query_text = query
-    # Search public indexes with core concepts, not a 12-term AND-like
-    # sentence containing vendors, commentary, and unrelated instructions.
-    query = " ".join(terms[:6])[:160]
+    named_product_orgs = requested_product_institutions(query_text)
+    subject_terms = [word for word in terms if word not in named_product_orgs]
+    query = " ".join((subject_terms[:4] if len(named_product_orgs) >= 2
+                      and len(subject_terms) >= 2 else terms[:6]))[:160]
 
     async def search(session: httpx.AsyncClient) -> list[dict]:
         tech = technical_topic(terms)
@@ -469,6 +483,21 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
             items = parse_rss(resp.content, "Bing concise web-search RSS", 10)
             log.info("Bing concise RSS parsed %d metadata results", len(items))
             return items
+
+        async def get_product_site(org: str) -> list[dict]:
+            host = PRODUCT_OFFICIAL_DOMAINS[org][0]
+            q = "site:" + host + " " + " ".join(subject_terms[:3])
+            resp = await session.get("https://www.bing.com/search",
+                                     params={"q": q, "format": "rss", "mkt": "en-US"},
+                                     timeout=7.0)
+            if resp.status_code != 200:
+                return []
+            items = parse_rss(resp.content, "Official product institution via Bing RSS", 10)
+            found = [item for item in items
+                     if urlsplit(item["url"]).hostname in PRODUCT_OFFICIAL_DOMAINS[org]
+                     and not urlsplit(item["url"]).path.casefold().endswith((".pdf", ".xml", ".json"))]
+            log.info("Product official discovery org=%s candidates=%d", org, len(found))
+            return found[:4]
 
         # Independent official sources are discovered through the same free
         # Bing RSS endpoint, without constructing or guessing document URLs.
@@ -599,6 +628,8 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
             return items
 
         providers = [get_bing(), get_bing_short(), get_wikipedia(), get_news()]
+        if len(named_product_orgs) >= 2:
+            providers.extend(get_product_site(org) for org in named_product_orgs)
         providers.extend(get_official_site(org) for org in organizations)
         providers.extend(get_accessibility_site(org) for org in accessibility_orgs)
         if tech:
@@ -624,6 +655,18 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
         # Preserve institution-specific ranking for the curated protocols.
         if not organizations and not accessibility_orgs:
             ranked = prioritize_readable_sources(ranked)
+        # Preserve distinct official sources before generic indexing results.
+        if len(named_product_orgs) >= 2:
+            official, selected_urls = [], set()
+            for org in named_product_orgs:
+                for pair in ranked:
+                    if (urlsplit(pair[1]["url"]).hostname in PRODUCT_OFFICIAL_DOMAINS[org]
+                            and pair[1]["url"] not in selected_urls):
+                        official.append(pair)
+                        selected_urls.add(pair[1]["url"])
+                        break
+            ranked = official + [pair for pair in ranked
+                                 if pair[1]["url"] not in selected_urls]
         # Prefer one strongly-relevant article from each requested institution,
         # instead of three near-duplicate pages from a single organization.
         if len(organizations) >= 2 or len(accessibility_orgs) >= 2:
