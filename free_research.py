@@ -14,6 +14,7 @@ from urllib.parse import quote, urlsplit
 from xml.etree import ElementTree
 
 import httpx
+from public_article_reader import safe_public_article_url
 
 log = logging.getLogger("free_research")
 MAX_BYTES = 550_000
@@ -375,6 +376,47 @@ def parse_wikipedia(data: dict, limit: int = 3) -> list[dict]:
     return result
 
 
+def readable_article_priority(item: dict) -> int:
+    """Prefer safe direct article/doc URLs over RSS redirects and marketing landing pages.
+
+    Heuristic only: a nonzero score is NOT evidence that the page can be read.
+    The DNS-pinned reader and actual HTML extraction remain authoritative.
+    """
+    url = item.get("url", "")
+    if not safe_public_article_url(url):
+        return 0
+    path = urlsplit(url).path.casefold()
+    segments = [part for part in path.split("/") if part]
+    score = 10  # A direct safe URL is preferable to a search index redirect.
+    if path.endswith((".html", ".htm")):
+        score += 6
+    if any(segment in {"resources", "guides", "guide", "article", "articles",
+                       "blog", "documentation", "docs"} for segment in segments):
+        score += 6
+    if len(segments) >= 4:
+        score += 3
+    elif len(segments) >= 3:
+        score += 1
+    if urlsplit(url).hostname in {"en.wikipedia.org", "en.m.wikipedia.org"}:
+        score -= 4  # Useful metadata, but often large/blocked in bounded reader.
+    return score
+
+
+def prioritize_readable_sources(items: list[tuple[int, dict]]) -> list[tuple[int, dict]]:
+    """Source diversity first, without discarding useful secondary metadata."""
+    ranked = sorted(items, key=lambda pair: (
+        readable_article_priority(pair[1]), pair[0]), reverse=True)
+    diverse, others, hosts = [], [], set()
+    for pair in ranked:
+        host = urlsplit(pair[1]["url"]).hostname
+        if host in hosts:
+            others.append(pair)
+        else:
+            hosts.add(host)
+            diverse.append(pair)
+    return diverse + others
+
+
 async def public_source_search(query: str, *, client: httpx.AsyncClient | None = None) -> list[dict]:
     """Search Bing RSS, Wikipedia API and Google News RSS concurrently.
 
@@ -556,6 +598,11 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
                 if score > 0:
                     ranked.append((score, item))
         ranked.sort(key=lambda pair: pair[0], reverse=True)
+        # General open-web reading is limited to three network attempts: put
+        # directly readable article-style URLs before tracking/news redirects.
+        # Preserve institution-specific ranking for the curated protocols.
+        if not organizations and not accessibility_orgs:
+            ranked = prioritize_readable_sources(ranked)
         # Prefer one strongly-relevant article from each requested institution,
         # instead of three near-duplicate pages from a single organization.
         if len(organizations) >= 2 or len(accessibility_orgs) >= 2:
