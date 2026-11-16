@@ -563,7 +563,10 @@ def select_relevant_excerpt(text: str, query: str) -> str:
         return ""
     ranked = []
     for i, part in enumerate(parts):
+        # Both raw text and canonical topic aliases: Wi-Fi 7 appears as
+        # wifi7 in the question but as separate words in most articles.
         words = set(re.findall(r"[a-z0-9]+", part.lower()))
+        words.update(search_query_terms(part))
         overlap = len(terms & words)
         ranked.append((overlap, i, part))
     ranked.sort(key=lambda x: (-x[0], x[1]))
@@ -752,8 +755,10 @@ def wifi7_comparison_recovery(question: str, sources: list[dict]) -> list[dict]:
     # that a website is currently accessible or its content has been read.
     # Preserve real search candidates whenever a previously readable
     # comparison domain is already present; do not displace them with recovery.
-    known_hosts = {urlsplit(url).hostname for url, _ in WIFI7_COMPARISON_DOCS}
-    if any(urlsplit(ref.get("url", "")).hostname in known_hosts for ref in sources):
+    known_hosts = {(urlsplit(url).hostname or "").removeprefix("www.")
+                   for url, _ in WIFI7_COMPARISON_DOCS}
+    if any((urlsplit(ref.get("url", "")).hostname or "").removeprefix("www.") in known_hosts
+           for ref in sources):
         return []
     discovered = {ref.get("url") for ref in sources}
     return [{"provider": "Reviewed Wi-Fi comparison page (not yet read)",
