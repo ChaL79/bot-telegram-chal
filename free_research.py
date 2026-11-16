@@ -59,6 +59,18 @@ PRODUCT_OFFICIAL_SITEMAPS = {
 }
 MAX_SITEMAP_BYTES = 350_000
 
+# Marketplace product offers are not technical documentation evidence.
+RESEARCH_MARKETPLACE_HOSTS = frozenset({
+    "woot.com", "amazon.com", "ebay.com", "bestbuy.com", "newegg.com",
+})
+
+
+def is_marketplace_listing(url: str) -> bool:
+    host = urlsplit(url).hostname or ""
+    return any(host == base or host.endswith("." + base)
+               for base in RESEARCH_MARKETPLACE_HOSTS)
+
+
 
 def requested_product_institutions(question: str) -> list[str]:
     return [name for name in PRODUCT_OFFICIAL_DOMAINS
@@ -724,6 +736,13 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
                 if item["url"] in urls:
                     continue
                 urls.add(item["url"])
+                # Explicit documentation comparisons must not be supported by
+                # storefront listings, even when the title mentions NVMe/SATA.
+                if (len(named_product_orgs) >= 2
+                        and re.search(r"\\b(?:rasmi|dokumentasi|documentation|official)\\b",
+                                      query_text, re.I)
+                        and is_marketplace_listing(item["url"])):
+                    continue
                 score = source_relevance(item, terms)
                 # Trusted sitemap path proves discovery of a URL, NOT page content.
                 # It is eligible for article reading only in an explicitly named
