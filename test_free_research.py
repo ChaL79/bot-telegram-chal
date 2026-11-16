@@ -120,6 +120,31 @@ class FreeResearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(search_query_terms(query), ["python", "asyncio", "rate", "limiting"])
         self.assertEqual(search_query_terms("/deepdive Cari Python asyncio rate limiting"), ["python", "asyncio", "rate", "limiting"])
 
+    def test_malay_fatigue_question_matches_english_official_articles(self):
+        question = ("Deep research mengenai pengurusan keletihan bagi pekerja offshore "
+                    "dan shift work. Cari dokumentasi rasmi CDC/NIOSH Amerika Syarikat "
+                    "dan HSE United Kingdom. Terangkan risiko kekurangan tidur, "
+                    "kerja syif malam, keselamatan pekerjaan dan langkah pencegahan.")
+        terms = search_query_terms(question)
+        self.assertEqual(terms[:3], ["fatigue", "shift", "work"])
+        self.assertIn("cdc", terms)
+        self.assertIn("hse", terms)
+        self.assertIn("sleep", terms)
+        items = [
+            {"title": "Fatigue and Work - CDC/NIOSH",
+             "url": "https://www.cdc.gov/niosh/fatigue/about/index.html",
+             "snippet": "Fatigue from night shift work and shortened sleep affects worker safety"},
+            {"title": "Fatigue - HSE",
+             "url": "https://www.hse.gov.uk/humanfactors/topics/fatigue.htm",
+             "snippet": "Fatigue in shift workers creates workplace safety risks"},
+        ]
+        for item in items:
+            self.assertGreater(source_relevance(item, terms), 0, item["url"])
+        unrelated = {"title":"Offshore company announcement",
+                     "url":"https://example.org/press/offshore",
+                     "snippet":"Company profile"}
+        self.assertEqual(source_relevance(unrelated, terms), 0)
+
     def test_wifi_research_keeps_topic_not_malay_instructions(self):
         question = ("/deepdive Deep research: Bandingkan Wi-Fi 7 dengan Wi-Fi 6 berdasarkan "
                     "sumber rasmi Wi-Fi Alliance, Intel dan TP-Link. Semak perbezaan kelajuan, "

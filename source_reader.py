@@ -563,7 +563,10 @@ def select_relevant_excerpt(text: str, query: str) -> str:
         return ""
     ranked = []
     for i, part in enumerate(parts):
+        # Both raw text and canonical topic aliases: Wi-Fi 7 appears as
+        # wifi7 in the question but as separate words in most articles.
         words = set(re.findall(r"[a-z0-9]+", part.lower()))
+        words.update(search_query_terms(part))
         overlap = len(terms & words)
         ranked.append((overlap, i, part))
     ranked.sort(key=lambda x: (-x[0], x[1]))
@@ -700,6 +703,70 @@ def recommended_official_docs(question: str) -> list[dict]:
     return refs
 
 
+# Reviewed first-party public articles for explicitly requested workplace fatigue
+# research. Fixed editorial references are candidates, not verified excerpts:
+# the DNS-pinned public reader must fetch the HTML before attribution.
+OCCUPATIONAL_FATIGUE_DOCS = (
+    ("https://www.cdc.gov/niosh/fatigue/about/index.html",
+     "CDC/NIOSH: Fatigue and Work", "www.cdc.gov", "cdc"),
+    ("https://www.hse.gov.uk/humanfactors/topics/fatigue.htm",
+     "UK HSE: Fatigue and shift work", "www.hse.gov.uk", "hse"),
+)
+
+
+def requested_fatigue_official_refs(question: str, sources: list[dict]) -> list[dict]:
+    terms = set(search_query_terms(question))
+    if ("fatigue" not in terms
+            or not ({"shift", "work", "sleep", "safety"} & terms)):
+        return []
+    named_cdc = bool(re.search(r"\b(?:CDC|NIOSH)\b", question, re.I))
+    named_hse = bool(re.search(r"\bHSE\b", question, re.I))
+    discovered = {ref.get("url") for ref in sources}
+    refs = []
+    for url, title, host, org in OCCUPATIONAL_FATIGUE_DOCS:
+        if not ((org == "cdc" and named_cdc)
+                or (org == "hse" and named_hse)):
+            continue
+        if url in discovered or not safe_public_article_url(url):
+            continue
+        refs.append({"provider": "Reviewed official occupational fatigue documentation (not yet read)",
+                     "title": title, "url": url, "snippet": "", "published": ""})
+    return refs
+
+
+# Small reviewed set of public pages that previously yielded real HTML.
+# Only for Wi-Fi 7 vs Wi-Fi 6 comparisons when public search is saturated by
+# news redirect wrappers. The actual page must be fetched and parsed again.
+WIFI7_COMPARISON_DOCS = (
+    ("https://www.intel.com/content/www/us/en/products/details/wireless/wi-fi-7-series.html",
+     "Intel: Wi-Fi 7 wireless products and technology"),
+    ("https://www.spectrum.com/resources/internet-wifi/what-is-wifi-7",
+     "Spectrum: What Is Wi-Fi 7?"),
+    ("https://www.highspeedinternet.com/resources/what-is-wi-fi-7",
+     "HighSpeedInternet: What is Wi-Fi 7?"),
+)
+
+
+def wifi7_comparison_recovery(question: str, sources: list[dict]) -> list[dict]:
+    terms = set(search_query_terms(question))
+    if not {"wifi7", "wifi6"}.issubset(terms):
+        return []
+    # No fabricated pages; this is a reviewed recovery reference, not a claim
+    # that a website is currently accessible or its content has been read.
+    # Preserve real search candidates whenever a previously readable
+    # comparison domain is already present; do not displace them with recovery.
+    known_hosts = {(urlsplit(url).hostname or "").removeprefix("www.")
+                   for url, _ in WIFI7_COMPARISON_DOCS}
+    if any((urlsplit(ref.get("url", "")).hostname or "").removeprefix("www.") in known_hosts
+           for ref in sources):
+        return []
+    discovered = {ref.get("url") for ref in sources}
+    return [{"provider": "Reviewed Wi-Fi comparison page (not yet read)",
+             "title": title, "url": url, "snippet": "", "published": ""}
+            for url, title in WIFI7_COMPARISON_DOCS
+            if url not in discovered and safe_public_article_url(url)]
+
+
 # Independently verified public technical article, not a named SSD manufacturer.
 # Used as a clearly labeled supplemental source for NVMe/SATA comparisons only.
 # It remains unverified evidence until actually fetched and excerpted.
@@ -758,7 +825,9 @@ async def enrich_with_read_excerpts(
     general_candidate_urls = set()
     fallback_refs = []
     if os.environ.get("ENABLE_GENERAL_PUBLIC_READER", "0") == "1" and not official_google and not identity_docs:
-        fallback_refs = accessibility_official_fallbacks(question, sources)
+        fallback_refs = (accessibility_official_fallbacks(question, sources)
+                         + requested_fatigue_official_refs(question, sources)
+                         + wifi7_comparison_recovery(question, sources))
         wanted_hosts = requested_wcag_hosts(question)
         # Prefer independent hostnames: three W3C navigation pages should not
         # crowd out an MDN or GOV.UK result already found by public search.

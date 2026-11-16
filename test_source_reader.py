@@ -842,6 +842,70 @@ No content on data practices.
         self.assertEqual(result[0]["read_status"],"verified_page_excerpt")
         self.assertIn("NVMe",result[0]["excerpt"])
 
+    async def test_bilingual_official_fatigue_fallbacks_use_real_excerpts(self):
+        from unittest.mock import patch
+        from source_reader import requested_fatigue_official_refs
+        q = ("Deep research mengenai pengurusan keletihan pekerja offshore dan shift work. "
+             "Cari dokumentasi rasmi CDC/NIOSH Amerika Syarikat dan HSE United Kingdom. "
+             "Terangkan risiko kekurangan tidur, kerja syif malam serta keselamatan pekerjaan.")
+        refs = requested_fatigue_official_refs(q, [])
+        self.assertEqual(len(refs), 2)
+        self.assertEqual({x["url"].split("/")[2] for x in refs},
+                         {"www.cdc.gov", "www.hse.gov.uk"})
+        read_urls = []
+        async def page(url, *, client=None):
+            read_urls.append(url)
+            if "cdc.gov" in url:
+                return ("<html><main><h1>Fatigue and Work</h1><p>Workplace fatigue "
+                        "from night shift work and reduced sleep impacts worker safety "
+                        "and increases fatigue-related errors.</p></main></html>")
+            return ("<html><main><h1>Fatigue</h1><p>Shift work and long working "
+                    "hours can cause fatigue, accidents and injuries due to "
+                    "insufficient rest and recovery.</p></main></html>")
+        with patch.dict("os.environ", {"ENABLE_GENERAL_PUBLIC_READER": "1"}):
+            with patch("source_reader.read_public_html", side_effect=page):
+                evidence = await enrich_with_read_excerpts(q, [])
+        self.assertEqual(len(read_urls), 2)
+        self.assertEqual(len(evidence), 2)
+        self.assertTrue(all(x["read_status"] == "verified_page_excerpt" for x in evidence))
+        self.assertIn("Workplace fatigue", evidence[0]["excerpt"])
+        self.assertIn("Shift work", evidence[1]["excerpt"])
+        self.assertEqual(requested_fatigue_official_refs("Fatigue in offshore", []), [])
+        self.assertEqual(requested_fatigue_official_refs("Python asyncio rate limiting CDC HSE", []), [])
+
+    async def test_wifi7_comparison_recovery_keeps_quotes_source_bound(self):
+        from unittest.mock import patch
+        from source_reader import wifi7_comparison_recovery
+        q = ("Bandingkan Wi-Fi 7 dengan Wi-Fi 6: kelajuan, latency, MLO dan 6 GHz.")
+        self.assertEqual(len(wifi7_comparison_recovery(q, [])), 3)
+        self.assertEqual(wifi7_comparison_recovery("Wi-Fi 6 sahaja", []), [])
+        seen = []
+        async def mock_fetch(url, *, client=None):
+            seen.append(url)
+            if "intel.com" in url:
+                return ("<html><main><p>Intel Wi-Fi 7 supports faster wireless "
+                        "performance and multi-link operation compared with Wi-Fi 6.</p></main></html>")
+            return ("<html><main><p>Wi-Fi 7 improves network speed and latency "
+                    "compared to Wi-Fi 6 using multi-link operation technology.</p></main></html>")
+        with patch.dict("os.environ", {"ENABLE_GENERAL_PUBLIC_READER": "1"}):
+            with patch("source_reader.read_public_html", side_effect=mock_fetch):
+                evidence = await enrich_with_read_excerpts(q, [])
+        self.assertEqual(len(seen), 3)
+        self.assertEqual(len(evidence), 3)
+        self.assertTrue(all(r["read_status"] == "verified_page_excerpt" for r in evidence))
+        self.assertEqual(len({r["url"].split("/")[2] for r in evidence}), 3)
+
+    async def test_fatigue_failed_page_not_marked_as_verified(self):
+        from unittest.mock import patch
+        q = "Pengurusan keletihan kerja syif tidur CDC NIOSH HSE shift work fatigue"
+        async def blocked(url, *, client=None):
+            return ""
+        with patch.dict("os.environ", {"ENABLE_GENERAL_PUBLIC_READER": "1"}):
+            with patch("source_reader.read_public_html", side_effect=blocked):
+                result = await enrich_with_read_excerpts(q, [])
+        self.assertEqual(len(result), 2)
+        self.assertTrue(all(x["read_status"] == "page_unavailable" for x in result))
+
     def test_ssd_secondary_reference_is_labeled_and_scoped(self):
         from source_reader import ssd_support_reference
         q = ("Bandingkan SSD NVMe PCIe dengan SSD SATA berdasarkan dokumentasi "
