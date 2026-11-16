@@ -817,6 +817,37 @@ No content on data practices.
         self.assertEqual({r["title"] for r in requested}, {"Intel", "TP-Link"})
         self.assertTrue(all(not r["url"] for r in requested))
 
+    async def test_plain_body_fallback_for_real_article_without_main_tag(self):
+        from unittest.mock import patch
+        from source_reader import BoundedBodyText
+        html = (b'<html><body><header>Navigation menu</header>'
+                b'<script>SECRET BAD INSTRUCTIONS</script>'
+                b'<section><h1>NVMe and SATA SSD technology</h1>'
+                b'<p>NVMe devices connect through PCIe, and many older SATA SSDs use '
+                b'the SATA interface for storage transfer and compatibility.</p>'
+                b'</section><footer>Unrelated disclaimer</footer></body></html>')
+        parser = BoundedBodyText()
+        parser.feed(html.decode())
+        self.assertIn("NVMe devices connect through PCIe", parser.content())
+        self.assertNotIn("SECRET BAD", parser.content())
+        self.assertNotIn("Unrelated disclaimer", parser.content())
+        url = "https://www.ibm.com/think/topics/nvme"
+        source = [{"title":"IBM NVMe versus SATA SSD guide","url":url,
+                   "provider":"Bing RSS","snippet":"NVMe SATA SSD","published":""}]
+        async def fake_fetch(uri, *, client=None):
+            return html.decode()
+        with patch.dict("os.environ", {"ENABLE_GENERAL_PUBLIC_READER":"1"}):
+            with patch("source_reader.read_public_html", side_effect=fake_fetch):
+                result = await enrich_with_read_excerpts("NVMe SATA SSD PCIe interface",source)
+        self.assertEqual(result[0]["read_status"],"verified_page_excerpt")
+        self.assertIn("NVMe",result[0]["excerpt"])
+
+    def test_body_fallback_strictly_caps_untrusted_document_text(self):
+        from source_reader import BoundedBodyText
+        parser = BoundedBodyText()
+        parser.feed("<html><body><div>" + "NVMe storage " * 70000 + "</div></body></html>")
+        self.assertLessEqual(parser.size,parser.MAX_TEXT)
+
     def test_official_doc_selection_and_no_fabricated_page(self):
         self.assertEqual(recommended_official_docs("Python asyncio.Semaphore")[0]["url"], OFFICIAL_SEMAPHORE)
         self.assertEqual(recommended_official_docs("Weather tomorrow"), [])
