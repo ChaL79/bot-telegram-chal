@@ -60,17 +60,18 @@ jobs:
               fetched = []
               for name, url in targets.items():
                   html = await read_public_html(url)
+                  main_text = ""
                   excerpt = ""
                   if html:
                       parser = MainText()
                       parser.feed(html)
                       main_text = parser.content()
+                      excerpt = select_relevant_excerpt(main_text, full)
                   print("EXTRACTION_DIAGNOSTIC", name, "main_chars", len(main_text),
                         "main_preview", repr(main_text[:140]), flush=True)
-                  excerpt = select_relevant_excerpt(main_text, full)
                   print("REAL_PAGE", name, "html_chars", len(html),
                         "excerpt_chars", len(excerpt), flush=True)
-                  if excerpt and len(excerpt) >= 65:
+                  if html and excerpt and len(excerpt) >= 65:
                       fetched.append(name)
               print("REAL_READ_SUCCESS", fetched, flush=True)
               found = await public_source_search(full)
@@ -79,5 +80,15 @@ jobs:
                   print("SOURCE", entry["title"][:95], entry["url"], flush=True)
               if not found:
                   raise AssertionError("No relevant live sources for Wi-Fi 7 test prompt")
+              import os
+              from source_reader import enrich_with_read_excerpts
+              os.environ["ENABLE_GENERAL_PUBLIC_READER"] = "1"
+              evidence = await enrich_with_read_excerpts(full, found)
+              verified = [item for item in evidence if item.get("read_status") == "verified_page_excerpt"]
+              domains = {httpx.URL(v["url"]).host for v in verified}
+              print("ACTUAL_RESEARCH_VERIFIED", [(v["url"], len(v["excerpt"])) for v in verified], flush=True)
+              print("ACTUAL_RESEARCH_DOMAINS", len(domains), flush=True)
+              if len(domains) < 2:
+                  raise AssertionError("Research path failed to read two independent discovered domains")
           asyncio.run(main())
           PY
