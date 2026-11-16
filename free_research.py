@@ -55,7 +55,7 @@ PRODUCT_OFFICIAL_DOMAINS = {
 
 def requested_product_institutions(question: str) -> list[str]:
     return [name for name in PRODUCT_OFFICIAL_DOMAINS
-            if re.search(r"\\b" + re.escape(name) + r"\\b", question, re.I)][:3]
+            if re.search(r"\b" + re.escape(name) + r"\b", question, re.I)][:3]
 
 
 ACCESSIBILITY_TOPIC_WORDS = frozenset({
