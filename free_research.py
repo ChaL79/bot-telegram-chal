@@ -475,7 +475,9 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
             # A second, independent concise query makes discovery less brittle
             # without using a paid API or broadening the reader's URL policy.
             key_terms = [term for term in terms if len(term) >= 5 and term not in {"wifi"}]
-            short_query = " ".join(key_terms[:2])[:80]
+            short_query = (" ".join([term for term in ("nvme", "sata", "ssd") if term in subject_terms][:2])
+                           if len(named_product_orgs) >= 2
+                           else " ".join(key_terms[:2])[:80])
             if (organizations or accessibility_orgs or len(terms) <= 5
                     or not short_query or short_query == query):
                 return []
