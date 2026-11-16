@@ -24,7 +24,9 @@ BLOCKED_EXTENSIONS = (".pdf", ".zip", ".tar", ".gz", ".exe", ".bin",
                       ".png", ".jpg", ".jpeg", ".webp", ".svg", ".gif",
                       ".mp4", ".mp3", ".xml", ".json", ".csv", ".xlsx",
                       ".docx", ".pptx", ".js", ".css")
-MAX_GENERAL_BYTES = 350_000
+# Bounded: official documentation HTML can exceed 400 kB while still being simple text.
+# Maximum of three reads means at most 1.5 MB of retained HTML per request.
+MAX_GENERAL_BYTES = 500_000
 
 
 def safe_public_article_url(url: str) -> bool:
