@@ -77,6 +77,14 @@ def requested_product_institutions(question: str) -> list[str]:
             if re.search(r"\b" + re.escape(name) + r"\b", question, re.I)][:3]
 
 
+def requested_ssd_manufacturers(question: str) -> list[str]:
+    """Return explicitly requested manufacturers for NVMe/SATA SSD comparisons."""
+    terms = set(search_query_terms(question))
+    if not {"ssd", "nvme", "sata"}.issubset(terms):
+        return []
+    return requested_product_institutions(question)
+
+
 ACCESSIBILITY_TOPIC_WORDS = frozenset({
     "wcag", "accessibility", "accessible", "keyboard", "focus",
     "visibility", "visible", "obscured", "testing", "test",
@@ -459,9 +467,9 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
     if not terms:
         return []
     query_text = query
-    named_product_orgs = requested_product_institutions(query_text)
+    named_product_orgs = requested_ssd_manufacturers(query_text)
     subject_terms = [word for word in terms if word not in named_product_orgs]
-    query = " ".join((subject_terms[:4] if len(named_product_orgs) >= 2
+    query = " ".join((subject_terms[:4] if len(named_product_orgs) >= 1
                       and len(subject_terms) >= 2 else terms[:6]))[:160]
 
     async def search(session: httpx.AsyncClient) -> list[dict]:
@@ -488,7 +496,7 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
             # without using a paid API or broadening the reader's URL policy.
             key_terms = [term for term in terms if len(term) >= 5 and term not in {"wifi"}]
             short_query = (" ".join([term for term in ("nvme", "sata", "ssd") if term in subject_terms][:2])
-                           if len(named_product_orgs) >= 2
+                           if len(named_product_orgs) >= 1
                            else " ".join(key_terms[:2])[:80])
             if (organizations or accessibility_orgs or len(terms) <= 5
                     or not short_query or short_query == query):
@@ -716,7 +724,7 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
             return items
 
         providers = [get_bing(), get_bing_short(), get_wikipedia(), get_news()]
-        if len(named_product_orgs) >= 2:
+        if len(named_product_orgs) >= 1:
             providers.extend(get_product_site(org) for org in named_product_orgs)
             providers.extend(get_product_sitemap(org) for org in named_product_orgs
                              if org in PRODUCT_OFFICIAL_SITEMAPS)
@@ -738,7 +746,7 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
                 urls.add(item["url"])
                 # Explicit documentation comparisons must not be supported by
                 # storefront listings, even when the title mentions NVMe/SATA.
-                if (len(named_product_orgs) >= 2
+                if (len(named_product_orgs) >= 1
                         and re.search(r"\b(?:rasmi|dokumentasi|documentation|official)\b",
                                       query_text, re.I)
                         and is_marketplace_listing(item["url"])):
@@ -749,7 +757,7 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
                 # maker/SSD comparison and must still pass the pinned HTML reader.
                 if (item.get("provider") ==
                         "Official manufacturer sitemap URL (page not read)"
-                        and len(named_product_orgs) >= 2
+                        and len(named_product_orgs) >= 1
                         and "ssd" in terms
                         and any(urlsplit(item["url"]).hostname in PRODUCT_OFFICIAL_DOMAINS[org]
                                 for org in named_product_orgs)
@@ -764,7 +772,7 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
         if not organizations and not accessibility_orgs:
             ranked = prioritize_readable_sources(ranked)
         # Preserve distinct official sources before generic indexing results.
-        if len(named_product_orgs) >= 2:
+        if len(named_product_orgs) >= 1:
             official, selected_urls = [], set()
             for org in named_product_orgs:
                 for pair in ranked:
