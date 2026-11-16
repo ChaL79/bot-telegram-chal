@@ -51,6 +51,10 @@ jobs:
                   "TP-Link": "https://www.tp-link.com/us/wifi7/",
                   "Intel": "https://www.intel.com/content/www/us/en/products/details/wireless/wi-fi-7-series.html",
                   "NETGEAR": "https://www.netgear.com/home/discover/wifi7/",
+                  "HighSpeedInternet": "https://www.highspeedinternet.com/resources/what-is-wi-fi-7",
+                  "Wikipedia": "https://en.wikipedia.org/wiki/Wi-Fi_7",
+                  "Spectrum": "https://www.spectrum.com/resources/internet-wifi/what-is-wifi-7",
+                  "TMobile": "https://www.t-mobile.com/home-internet/the-signal/internet/wifi-7",
               }
               fetched = []
               for name, url in targets.items():
