@@ -1,0 +1,103 @@
+name: Deep research live search diagnostic
+on:
+  pull_request:
+    paths:
+      - 'free_research.py'
+      - 'test_free_research.py'
+      - '.github/workflows/deep-research-live-discovery.yml'
+permissions:
+  contents: read
+jobs:
+  live-wifi-discovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements.txt
+      - name: Live public RSS + bounded relevance diagnostic (no secrets)
+        env:
+          ENABLE_GENERAL_PUBLIC_READER: '0'
+        run: |
+          python - <<'PY'
+          import asyncio
+          import httpx
+          from free_research import public_source_search, search_query_terms, parse_rss, source_relevance
+          full = ("Deep research: Bandingkan Wi-Fi 7 dengan Wi-Fi 6 berdasarkan sumber rasmi "
+                  "Wi-Fi Alliance, Intel dan TP-Link. Semak perbezaan kelajuan, latency, "
+                  "jalur 6 GHz, Multi-Link Operation (MLO), dan manfaat sebenar untuk internet "
+                  "rumah 500 Mbps. Cuba baca kandungan HTML sebenar daripada sekurang-kurangnya "
+                  "dua domain berbeza. Sertakan URL, petikan sebenar setiap halaman yang "
+                  "berjaya dibaca, dan asingkan sumber metadata sahaja atau gagal diakses.")
+          async def main():
+              terms = search_query_terms(full)
+              print("TERMS", terms, flush=True)
+              actual_query = " ".join(terms[:6])[:160]
+              async with httpx.AsyncClient(timeout=10.0) as cli:
+                  r = await cli.get("https://www.bing.com/search",
+                                    params={"q": actual_query, "format": "rss", "mkt": "en-US"})
+                  raw = parse_rss(r.content, "Bing RSS", 10) if r.status_code == 200 else []
+                  print("BING_HTTP", r.status_code, "RSS_RESULTS", len(raw), flush=True)
+                  for entry in raw:
+                      print("RAW_RELEVANCE", source_relevance(entry, terms),
+                            "TITLE", entry["title"][:95], "HOST", httpx.URL(entry["url"]).host,
+                            "URL", entry["url"][:170], flush=True)
+              async with httpx.AsyncClient(timeout=10.0) as cli:
+                  for q in ('"Wi-Fi 7"', 'wifi 7 intel', 'site:intel.com wifi 7', 'site:spectrum.com wifi 7', 'wifi7 wifi6'):
+                      resp = await cli.get("https://www.bing.com/search",
+                                           params={"q": q, "format": "rss", "mkt": "en-US"})
+                      hits = parse_rss(resp.content, "variant", 10) if resp.status_code == 200 else []
+                      print("QUERY_VARIANT", repr(q), "STATUS", resp.status_code,
+                            "HITS", len(hits),
+                            "RELEVANT", sum(1 for item in hits if source_relevance(item, terms) > 0),
+                            "FIRST", hits[0]["title"][:75] if hits else "", flush=True)
+              from public_article_reader import read_public_html
+              from source_reader import MainText, select_relevant_excerpt
+              targets = {
+                  "TP-Link": "https://www.tp-link.com/us/wifi7/",
+                  "Intel": "https://www.intel.com/content/www/us/en/products/details/wireless/wi-fi-7-series.html",
+                  "NETGEAR": "https://www.netgear.com/home/discover/wifi7/",
+                  "HighSpeedInternet": "https://www.highspeedinternet.com/resources/what-is-wi-fi-7",
+                  "Wikipedia": "https://en.wikipedia.org/wiki/Wi-Fi_7",
+                  "Spectrum": "https://www.spectrum.com/resources/internet-wifi/what-is-wifi-7",
+                  "TMobile": "https://www.t-mobile.com/home-internet/the-signal/internet/wifi-7",
+              }
+              fetched = []
+              for name, url in targets.items():
+                  html = await read_public_html(url)
+                  main_text = ""
+                  excerpt = ""
+                  if html:
+                      parser = MainText()
+                      parser.feed(html)
+                      main_text = parser.content()
+                      excerpt = select_relevant_excerpt(main_text, full)
+                  print("EXTRACTION_DIAGNOSTIC", name, "main_chars", len(main_text),
+                        "main_preview", repr(main_text[:140]), flush=True)
+                  print("REAL_PAGE", name, "html_chars", len(html),
+                        "excerpt_chars", len(excerpt), flush=True)
+                  if html and excerpt and len(excerpt) >= 65:
+                      fetched.append(name)
+              print("REAL_READ_SUCCESS", fetched, flush=True)
+              found = await public_source_search(full)
+              print("SELECTED", len(found), flush=True)
+              for entry in found:
+                  print("SOURCE", entry["title"][:95], entry["url"], flush=True)
+              if not found:
+                  raise AssertionError("No relevant live sources for Wi-Fi 7 test prompt")
+              import os
+              from source_reader import enrich_with_read_excerpts
+              os.environ["ENABLE_GENERAL_PUBLIC_READER"] = "1"
+              evidence = await enrich_with_read_excerpts(full, found)
+              verified = [item for item in evidence if item.get("read_status") == "verified_page_excerpt"]
+              domains = {httpx.URL(v["url"]).host for v in verified}
+              print("ACTUAL_RESEARCH_VERIFIED", [(v["url"], len(v["excerpt"])) for v in verified], flush=True)
+              print("ACTUAL_RESEARCH_DOMAINS", len(domains), flush=True)
+              if len(domains) < 2:
+                  raise AssertionError("Research path failed to read two independent discovered domains")
+          asyncio.run(main())
+          PY

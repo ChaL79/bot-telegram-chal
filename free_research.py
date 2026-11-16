@@ -14,6 +14,7 @@ from urllib.parse import quote, urlsplit
 from xml.etree import ElementTree
 
 import httpx
+from public_article_reader import safe_public_article_url
 
 log = logging.getLogger("free_research")
 MAX_BYTES = 550_000
@@ -78,11 +79,26 @@ QUERY_FILLER = frozenset({
     "without", "paid", "product", "products", "evidence", "actual",
     "using", "answer", "questions", "organization", "organizations",
     "website", "websites", "web", "docs", "guide", "guides",
+    # Malay prompt scaffolding must not displace technical subject terms.
+    "bandingkan", "berdasarkan", "rasmi", "dengan", "perbezaan",
+    "sebenar", "cuba", "baca", "kandungan", "sekurang", "kurangnya",
+    "dua", "tiga", "berbeza", "setiap", "halaman", "berjaya",
+    "asingkan", "metadata", "sahaja", "gagal", "diakses", "jangan",
+    "reka", "keputusan", "ujian", "petikan",
 })
 
 
 def _terms(value: str) -> list[str]:
-    return [word for word in re.findall(r"[a-z0-9]+", value.casefold())
+    # Keep hyphenated product names and their version as one search concept.
+    # "Wi-Fi 7", "WiFi7", and "WiFi 7" all get wifi7 + wifi; the same
+    # normalization is applied to titles/snippets when scoring RSS hits.
+    value = value.casefold()
+    value = re.sub(r"\bwi[\s-]*fi\b", "wifi", value)
+    value = re.sub(r"\btp[\s-]*link\b", "tplink", value)
+    value = re.sub(r"\bmulti[\s-]*link\b", "multilink", value)
+    value = re.sub(r"\b([256])\s*ghz\b", r"\1ghz", value)
+    value = re.sub(r"\bwifi[\s-]*([67])\b", r"wifi\1 wifi", value)
+    return [word for word in re.findall(r"[a-z0-9]+", value)
             if word not in QUERY_FILLER and len(word) > 1]
 
 
@@ -100,6 +116,8 @@ TOPIC_ANCHORS = frozenset({
     "ice", "sheets", "melting", "climate",
     "wcag", "accessibility", "keyboard", "focus", "visibility",
     "obscured", "w3c", "mdn", "govuk",
+    # Cross-domain consumer/technical research; not a vendor URL allowlist.
+    "wifi7", "wifi6", "wifi", "mlo", "6ghz", "latency", "multilink",
 })
 IDENTITY_ANCHORS = frozenset({
     "passkeys", "passkey", "fido2", "totp", "mfa", "otp", "phishing",
@@ -358,6 +376,47 @@ def parse_wikipedia(data: dict, limit: int = 3) -> list[dict]:
     return result
 
 
+def readable_article_priority(item: dict) -> int:
+    """Prefer safe direct article/doc URLs over RSS redirects and marketing landing pages.
+
+    Heuristic only: a nonzero score is NOT evidence that the page can be read.
+    The DNS-pinned reader and actual HTML extraction remain authoritative.
+    """
+    url = item.get("url", "")
+    if not safe_public_article_url(url):
+        return 0
+    path = urlsplit(url).path.casefold()
+    segments = [part for part in path.split("/") if part]
+    score = 10  # A direct safe URL is preferable to a search index redirect.
+    if path.endswith((".html", ".htm")):
+        score += 6
+    if any(segment in {"resources", "guides", "guide", "article", "articles",
+                       "blog", "documentation", "docs"} for segment in segments):
+        score += 6
+    if len(segments) >= 4:
+        score += 3
+    elif len(segments) >= 3:
+        score += 1
+    if urlsplit(url).hostname in {"en.wikipedia.org", "en.m.wikipedia.org"}:
+        score -= 4  # Useful metadata, but often large/blocked in bounded reader.
+    return score
+
+
+def prioritize_readable_sources(items: list[tuple[int, dict]]) -> list[tuple[int, dict]]:
+    """Source diversity first, without discarding useful secondary metadata."""
+    ranked = sorted(items, key=lambda pair: (
+        readable_article_priority(pair[1]), pair[0]), reverse=True)
+    diverse, others, hosts = [], [], set()
+    for pair in ranked:
+        host = urlsplit(pair[1]["url"]).hostname
+        if host in hosts:
+            others.append(pair)
+        else:
+            hosts.add(host)
+            diverse.append(pair)
+    return diverse + others
+
+
 async def public_source_search(query: str, *, client: httpx.AsyncClient | None = None) -> list[dict]:
     """Search Bing RSS, Wikipedia API and Google News RSS concurrently.
 
@@ -368,7 +427,9 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
     if not terms:
         return []
     query_text = query
-    query = " ".join(terms)[:160]
+    # Search public indexes with core concepts, not a 12-term AND-like
+    # sentence containing vendors, commentary, and unrelated instructions.
+    query = " ".join(terms[:6])[:160]
 
     async def search(session: httpx.AsyncClient) -> list[dict]:
         tech = technical_topic(terms)
@@ -386,6 +447,27 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
                 return []
             items = parse_rss(resp.content, "Bing web-search RSS", 10)
             log.info("Bing RSS parsed %d metadata results", len(items))
+            return items
+
+        async def get_bing_short():
+            # A verbose multi-condition search may return generic/noisy results.
+            # A second, independent concise query makes discovery less brittle
+            # without using a paid API or broadening the reader's URL policy.
+            key_terms = [term for term in terms if len(term) >= 5 and term not in {"wifi"}]
+            short_query = " ".join(key_terms[:2])[:80]
+            if (organizations or accessibility_orgs or len(terms) <= 5
+                    or not short_query or short_query == query):
+                return []
+            resp = await session.get(
+                "https://www.bing.com/search",
+                params={"q": short_query, "format": "rss", "mkt": "en-US"},
+                timeout=7.0,
+            )
+            if resp.status_code != 200:
+                log.info("Bing concise RSS response HTTP %s", resp.status_code)
+                return []
+            items = parse_rss(resp.content, "Bing concise web-search RSS", 10)
+            log.info("Bing concise RSS parsed %d metadata results", len(items))
             return items
 
         # Independent official sources are discovered through the same free
@@ -516,7 +598,7 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
             log.info("Hacker News API parsed %d metadata results", len(items))
             return items
 
-        providers = [get_bing(), get_wikipedia(), get_news()]
+        providers = [get_bing(), get_bing_short(), get_wikipedia(), get_news()]
         providers.extend(get_official_site(org) for org in organizations)
         providers.extend(get_accessibility_site(org) for org in accessibility_orgs)
         if tech:
@@ -537,6 +619,11 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
                 if score > 0:
                     ranked.append((score, item))
         ranked.sort(key=lambda pair: pair[0], reverse=True)
+        # General open-web reading is limited to three network attempts: put
+        # directly readable article-style URLs before tracking/news redirects.
+        # Preserve institution-specific ranking for the curated protocols.
+        if not organizations and not accessibility_orgs:
+            ranked = prioritize_readable_sources(ranked)
         # Prefer one strongly-relevant article from each requested institution,
         # instead of three near-duplicate pages from a single organization.
         if len(organizations) >= 2 or len(accessibility_orgs) >= 2:

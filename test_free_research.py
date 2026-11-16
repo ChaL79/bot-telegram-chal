@@ -120,6 +120,88 @@ class FreeResearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(search_query_terms(query), ["python", "asyncio", "rate", "limiting"])
         self.assertEqual(search_query_terms("/deepdive Cari Python asyncio rate limiting"), ["python", "asyncio", "rate", "limiting"])
 
+    def test_wifi_research_keeps_topic_not_malay_instructions(self):
+        question = ("/deepdive Deep research: Bandingkan Wi-Fi 7 dengan Wi-Fi 6 berdasarkan "
+                    "sumber rasmi Wi-Fi Alliance, Intel dan TP-Link. Semak perbezaan kelajuan, "
+                    "latency, jalur 6 GHz, Multi-Link Operation (MLO), dan manfaat sebenar "
+                    "untuk internet rumah 500 Mbps. Cuba baca kandungan HTML sebenar daripada "
+                    "sekurang-kurangnya dua domain berbeza. Sertakan URL, petikan sebenar "
+                    "setiap halaman yang berjaya dibaca, dan asingkan sumber metadata sahaja "
+                    "atau gagal diakses. Jangan reka fakta, petikan atau keputusan ujian.")
+        terms = search_query_terms(question)
+        self.assertEqual(terms[:3], ["wifi7", "wifi", "wifi6"])
+        self.assertTrue({"mlo", "6ghz", "latency"}.issubset(set(terms)))
+        self.assertNotIn("bandingkan", terms)
+        self.assertNotIn("berdasarkan", terms)
+        self.assertNotIn("sekurang", terms)
+        self.assertNotIn("petikan", terms)
+
+    def test_wifi_version_matching_accepts_real_articles_not_generic_wifi(self):
+        terms = search_query_terms("Wi-Fi 7 vs Wi-Fi 6 MLO 6 GHz")
+        for item in [
+            {"title": "Wi-Fi 7 multi-link operation MLO explained",
+             "url": "https://example.org/guides/wifi-7-mlo/",
+             "snippet": "Wi-Fi 7 technology and 6 GHz"},
+            {"title": "Wi-Fi 6 compared to Wi-Fi 7",
+             "url": "https://example.org/articles/wifi6-vs-wifi7",
+             "snippet": "Wireless networking standards"},
+        ]:
+            self.assertGreater(source_relevance(item, terms), 0)
+        generic = {"title": "Public Wi-Fi hotspots", "url": "https://example.org/hotspots",
+                   "snippet": "Free internet services"}
+        self.assertEqual(source_relevance(generic, terms), 0)
+
+    async def test_wifi_search_accepts_source_results_after_normalization(self):
+        question = "Bandingkan Wi-Fi 7 dengan Wi-Fi 6, latency dan Multi-Link Operation."
+        received = []
+        def mock(req):
+            if req.url.host == "www.bing.com":
+                received.append(str(req.url.params.get("q")))
+                return httpx.Response(200, content=b"""<rss><channel>
+                    <item><title>Wi-Fi 7 multi-link operation MLO</title>
+                    <link>https://example.org/wifi7-mlo</link>
+                    <description>Compare Wi-Fi 7 and Wi-Fi 6 and latency improvements</description></item>
+                    <item><title>Unrelated shopping news</title>
+                    <link>https://example.org/shopping</link>
+                    <description>Nothing about networking</description></item>
+                </channel></rss>""")
+            return httpx.Response(403)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as client:
+            result = await public_source_search(question, client=client)
+        self.assertEqual(len(result), 1)
+        self.assertIn("Wi-Fi 7", result[0]["title"])
+        self.assertIn("wifi7", received[0])
+
+    def test_direct_article_urls_rank_above_news_redirects_and_marketing(self):
+        from free_research import prioritize_readable_sources, readable_article_priority
+        refs = [
+            {"url": "https://news.google.com/rss/articles/article?oc=5",
+             "title": "Research news index"},
+            {"url": "https://www.tp-link.com/us/wifi7/",
+             "title": "WiFi 7 marketing landing page"},
+            {"url": "https://www.intel.com/content/www/us/en/products/details/wireless/wi-fi-7-series.html",
+             "title": "Intel Wi-Fi 7 reference"},
+            {"url": "https://www.spectrum.com/resources/internet-wifi/what-is-wifi-7",
+             "title": "Spectrum Wi-Fi 7 article"},
+            {"url": "https://www.highspeedinternet.com/resources/what-is-wi-fi-7",
+             "title": "Wi-Fi 7 article"},
+        ]
+        ranked = prioritize_readable_sources([(10, r) for r in refs])
+        chosen = [x["url"] for _score, x in ranked[:3]]
+        self.assertEqual(set(chosen), {refs[2]["url"], refs[3]["url"], refs[4]["url"]})
+        self.assertEqual(readable_article_priority(refs[0]), 0)
+        self.assertGreater(readable_article_priority(refs[2]),
+                           readable_article_priority(refs[1]))
+
+    def test_priority_does_not_bypass_safe_url_checks(self):
+        from free_research import readable_article_priority
+        for url in ("http://www.intel.com/en/articles/wifi7",
+                    "https://127.0.0.1/resource/wifi7.html",
+                    "https://example.org/docs/article?api_key=secret",
+                    "https://evil.local/resources/wifi7.html",
+                    "https://example.org/resources/../../private"):
+            self.assertEqual(readable_article_priority({"url": url}), 0)
+
     def test_long_multisource_question_finds_security_subject_not_conduct(self):
         q = ("Conduct independent, multi-source cybersecurity research as of 15 November 2026. "
              "Compare three account authentication methods: FIDO2 passkeys, authenticator-app "
