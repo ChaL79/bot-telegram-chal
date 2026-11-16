@@ -32,6 +32,58 @@ class AdvancedTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("tools", seen[0][1])
         self.assertIn(RESEARCH_MODEL, seen[0][0])
 
+    def test_deterministic_quotes_are_exact_and_source_bound(self):
+        from gemini_advanced import verified_source_quotes, suppress_model_quotes
+        sources = [
+            {"title": "IBM documentation", "url": "https://www.ibm.com/think/topics/nvme",
+             "read_status": "verified_page_excerpt",
+             "excerpt": "IBM NVMe allows SSDs to connect through PCIe and reduce traditional storage overhead."},
+            {"title": "Samsung documentation", "url": "https://semiconductor.samsung.com/ssd/",
+             "read_status": "verified_page_excerpt",
+             "excerpt": "Samsung NVMe SSDs with PCIe are much faster than SATA SSDs for transfers."},
+            {"title": "Kingston", "url": "https://www.kingston.com/en/ssd/",
+             "read_status": "page_unavailable", "excerpt": "FAKE metadata quote must not appear."},
+        ]
+        output = verified_source_quotes(sources, limit_words=20)
+        self.assertIn('Petikan disahkan: "IBM NVMe allows SSDs', output)
+        self.assertIn('Petikan disahkan: "Samsung NVMe SSDs', output)
+        self.assertNotIn('FAKE metadata quote', output)
+        self.assertEqual(output.count("Petikan disahkan:"), 2)
+        self.assertLess(output.index("www.ibm.com"), output.index("Samsung NVMe SSDs"))
+        bad = ('IBM: "Samsung NVMe SSDs with PCIe are much faster than SATA SSDs for transfers."\n'
+               'Samsung: "Samsung NVMe SSDs with PCIe are much faster than SATA SSDs for transfers."')
+        cleaned = suppress_model_quotes(bad)
+        self.assertNotIn("Samsung NVMe SSDs with PCIe", cleaned)
+        self.assertIn("IBM:", cleaned)
+
+    async def test_deepdive_replaces_model_misattributed_quote_with_verified_source(self):
+        from unittest.mock import patch
+        sources = [
+            {"title": "IBM NVMe", "provider": "Reviewed secondary technical documentation",
+             "url": "https://www.ibm.com/think/topics/nvme",
+             "read_status": "verified_page_excerpt", "published": "",
+             "excerpt": "IBM NVMe connects high-speed SSDs through the PCIe interface rather than using older SATA technology."},
+            {"title": "Samsung SSD", "provider": "Official manufacturer sitemap",
+             "url": "https://semiconductor.samsung.com/consumer-storage/support/faqs/internalssd-product-information/",
+             "read_status": "verified_page_excerpt", "published": "",
+             "excerpt": "Samsung NVMe SSDs with PCIe are much faster than SATA SSDs in many workloads."},
+        ]
+        fake_answer = ('IBM: "Samsung NVMe SSDs with PCIe are much faster than SATA SSDs in many workloads."\n'
+                       "Kedua-dua sumber membandingkan teknologi storan.")
+        def ai_mock(req):
+            return httpx.Response(200, json={"candidates":[{"content":{"parts":[{"text":fake_answer}]}}]})
+        with patch("gemini_advanced.public_source_search", return_value=sources):
+            with patch("gemini_advanced.enrich_with_read_excerpts", return_value=sources):
+                async with httpx.AsyncClient(transport=httpx.MockTransport(ai_mock)) as client:
+                    result, ok = await run_advanced(
+                        "Bandingkan SSD NVMe SATA", "TEST_KEY", "deepdive", client=client)
+        self.assertTrue(ok)
+        self.assertEqual(result.count("Samsung NVMe SSDs with PCIe are much faster"), 1)
+        self.assertIn('Petikan disahkan: "IBM NVMe connects', result)
+        self.assertIn('Petikan disahkan: "Samsung NVMe SSDs', result)
+        self.assertIn("https://www.ibm.com/think/topics/nvme", result)
+        self.assertIn("https://semiconductor.samsung.com", result)
+
     async def test_deepdive_single_request_55s_timeout_no_retry(self):
         from gemini_advanced import GEMINI_READ_TIMEOUT
         calls = []
