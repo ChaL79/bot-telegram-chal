@@ -1,0 +1,59 @@
+name: Fatigue bilingual official live acceptance
+on:
+  pull_request:
+    paths:
+      - 'free_research.py'
+      - 'source_reader.py'
+      - 'test_free_research.py'
+      - 'test_source_reader.py'
+      - '.github/workflows/fatigue-official-live.yml'
+permissions:
+  contents: read
+jobs:
+  fatigue-official-live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements.txt
+      - name: Reproduce Malay offshore fatigue question using real official HTML
+        env:
+          ENABLE_GENERAL_PUBLIC_READER: '1'
+        run: |
+          python - <<'PY'
+          import asyncio
+          from urllib.parse import urlsplit
+          from free_research import public_source_search
+          from source_reader import enrich_with_read_excerpts
+          q = ("Deep research mengenai pengurusan keletihan (fatigue management) bagi "
+               "pekerja offshore dan shift work. Cari dokumentasi rasmi CDC/NIOSH "
+               "Amerika Syarikat dan HSE United Kingdom. Terangkan risiko kekurangan "
+               "tidur, kerja syif malam, kesan kepada keselamatan pekerjaan dan "
+               "langkah pencegahan praktikal. Baca sekurang-kurangnya dua halaman "
+               "HTML daripada dua domain rasmi bebas. Sertakan URL, status "
+               "verified_page_excerpt, petikan asli maksimum 20 perkataan.")
+          async def main():
+              sources = await public_source_search(q)
+              print("FATIGUE_SEARCH_COUNT",len(sources),flush=True)
+              for item in sources:
+                  print("FATIGUE_SEARCH_URL",item["url"],flush=True)
+              evidence = await enrich_with_read_excerpts(q,sources)
+              verified = [e for e in evidence if e.get("read_status")=="verified_page_excerpt"]
+              for e in evidence:
+                  print("FATIGUE_EVIDENCE",e.get("read_status"),e.get("url"),
+                        "EXCERPT_CHARS",len(e.get("excerpt","")),flush=True)
+              official = {"www.cdc.gov","www.hse.gov.uk"}
+              hosts = {urlsplit(e.get("url","")).hostname for e in verified}
+              print("FATIGUE_VERIFIED_HOSTS",sorted(hosts),flush=True)
+              if not official.issubset(hosts):
+                  raise AssertionError("CDC/NIOSH and UK HSE must both yield real, verified HTML excerpts")
+              for ref in verified:
+                  if urlsplit(ref["url"]).hostname in official and len(ref.get("excerpt",""))<65:
+                      raise AssertionError("Official domain had insufficient real extracted text")
+          asyncio.run(main())
+          PY
