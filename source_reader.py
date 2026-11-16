@@ -716,15 +716,15 @@ def requested_fatigue_official_refs(question: str, sources: list[dict]) -> list[
     if ("fatigue" not in terms
             or not ({"shift", "work", "sleep", "safety"} & terms)):
         return []
-    named_cdc = bool(re.search(r"\\b(?:CDC|NIOSH)\\b", question, re.I))
-    named_hse = bool(re.search(r"\\bHSE\\b", question, re.I))
-    discovered = {urlsplit(ref.get("url", "")).hostname for ref in sources}
+    named_cdc = bool(re.search(r"\b(?:CDC|NIOSH)\b", question, re.I))
+    named_hse = bool(re.search(r"\bHSE\b", question, re.I))
+    discovered = {ref.get("url") for ref in sources}
     refs = []
     for url, title, host, org in OCCUPATIONAL_FATIGUE_DOCS:
         if not ((org == "cdc" and named_cdc)
                 or (org == "hse" and named_hse)):
             continue
-        if host in discovered or not safe_public_article_url(url):
+        if url in discovered or not safe_public_article_url(url):
             continue
         refs.append({"provider": "Reviewed official occupational fatigue documentation (not yet read)",
                      "title": title, "url": url, "snippet": "", "published": ""})
