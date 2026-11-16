@@ -455,7 +455,8 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
             # without using a paid API or broadening the reader's URL policy.
             key_terms = [term for term in terms if len(term) >= 5 and term not in {"wifi"}]
             short_query = " ".join(key_terms[:2])[:80]
-            if len(terms) <= 5 or not short_query or short_query == query:
+            if (organizations or accessibility_orgs or len(terms) <= 5
+                    or not short_query or short_query == query):
                 return []
             resp = await session.get(
                 "https://www.bing.com/search",
