@@ -47,6 +47,7 @@ jobs:
                             "HAS_NVME",body.lower().count("nvme"),flush=True)
               except Exception as exc:
                   print("PROBE",tag,"ERROR",type(exc).__name__,flush=True)
-          awaitable = asyncio.gather(*(probe(item) for item in requests))
-          asyncio.run(awaitable)
+          async def main():
+              await asyncio.gather(*(probe(item) for item in requests))
+          asyncio.run(main())
           PY
