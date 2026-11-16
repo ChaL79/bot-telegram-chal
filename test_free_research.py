@@ -202,6 +202,93 @@ class FreeResearchTests(unittest.IsolatedAsyncioTestCase):
                     "https://example.org/resources/../../private"):
             self.assertEqual(readable_article_priority({"url": url}), 0)
 
+    async def test_ssd_brand_scoped_discovery_and_selection(self):
+        from free_research import requested_product_institutions
+        question = ("Bandingkan SSD NVMe PCIe dengan SSD SATA berdasarkan "
+                    "dokumentasi rasmi Kingston, Crucial dan Samsung.")
+        self.assertEqual(requested_product_institutions(question),
+                         ["kingston", "crucial", "samsung"])
+        seen = []
+        def mock(req):
+            query = str(req.url.params.get("q", ""))
+            seen.append(query)
+            if "kingston" in query.split() and not query.startswith("site:"):
+                return httpx.Response(200, content=b"""<rss><channel><item>
+                  <title>NVMe vs SATA SSDs Kingston</title>
+                  <link>https://www.kingston.com/en/blog/pc-performance/nvme-vs-sata</link>
+                  <description>SSD NVMe PCIe performance versus SATA</description>
+                  </item><item><title>Fake offsite Kingston SSD</title>
+                  <link>https://evil.example/kingston/ssd</link>
+                  <description>NVMe SATA</description></item></channel></rss>""")
+            if "crucial" in query.split() and not query.startswith("site:"):
+                return httpx.Response(200, content=b"""<rss><channel><item>
+                  <title>Crucial SSD SATA and NVMe</title>
+                  <link>https://www.crucial.com/articles/about-ssd/nvme-vs-sata</link>
+                  <description>NVMe PCIe and SATA SSD interface</description>
+                  </item></channel></rss>""")
+            if "samsung" in query.split() and not query.startswith("site:"):
+                return httpx.Response(200, content=b"""<rss><channel><item>
+                  <title>Samsung NVMe SSD SATA product guide</title>
+                  <link>https://semiconductor.samsung.com/consumer-storage/support/faqs/internalssd-product-information/</link>
+                  <description>NVMe PCIe SSD SATA performance</description>
+                  </item></channel></rss>""")
+            return httpx.Response(403)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as client:
+            found = await public_source_search(question, client=client)
+        self.assertEqual(len([q for q in seen if any(org in q.split() for org in ("kingston", "crucial", "samsung"))]), 3)
+        hosts = {httpx.URL(item["url"]).host for item in found[:3]}
+        self.assertEqual(hosts, {"www.kingston.com", "www.crucial.com",
+                                 "semiconductor.samsung.com"})
+        self.assertFalse(any("evil.example" in item["url"] for item in found))
+
+    async def test_official_sitemap_discovery_is_url_metadata_only(self):
+        question = ("Bandingkan SSD NVMe PCIe dengan SSD SATA dokumentasi "
+                    "Kingston Crucial Samsung")
+        sitemap = b"""<?xml version="1.0"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+          <url><loc>https://semiconductor.samsung.com/ssd/pc-ssd/pm9e1/</loc></url>
+          <url><loc>https://semiconductor.samsung.com/consumer-storage/support/faqs/internalssd-product-information/</loc></url>
+          <url><loc>https://127.0.0.1/ssd/private</loc></url>
+          <url><loc>https://evil.example/ssd/nvme/</loc></url>
+          <url><loc>https://semiconductor.samsung.com/account/ssd/</loc></url>
+          </urlset>"""
+        def mock(req):
+            if str(req.url) == "https://semiconductor.samsung.com/sitemap.xml":
+                return httpx.Response(200, headers={"content-type":"application/xml"},content=sitemap)
+            return httpx.Response(403)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as client:
+            sources = await public_source_search(question,client=client)
+        samsung = [item for item in sources if item["url"].startswith("https://semiconductor.samsung.com")]
+        self.assertGreaterEqual(len(samsung),1)
+        self.assertEqual(samsung[0]["url"],
+            "https://semiconductor.samsung.com/consumer-storage/support/faqs/internalssd-product-information/")
+        self.assertIn("sitemap",samsung[0]["provider"].lower())
+        self.assertFalse(any("evil.example" in x["url"] or "127.0.0.1" in x["url"] for x in sources))
+        self.assertTrue(all("excerpt" not in x for x in sources))
+
+    async def test_official_multi_brand_research_excludes_retail_offers(self):
+        from free_research import is_marketplace_listing
+        self.assertTrue(is_marketplace_listing(
+            "https://computers.woot.com/offers/samsung-ssd"))
+        self.assertFalse(is_marketplace_listing(
+            "https://semiconductor.samsung.com/consumer-storage/support/faqs/internalssd-product-information/"))
+        rss = b"""<rss><channel><item><title>Samsung 960 EVO NVMe SATA SSD - Woot</title>
+                  <link>https://www.woot.com/offers/samsung-960-evo-nvme-m-2-ssd-1tb-0</link>
+                  <description>NVMe SATA SSD</description></item></channel></rss>"""
+        question = ("Bandingkan SSD NVMe PCIe dengan SSD SATA berdasarkan "
+                    "dokumentasi rasmi Kingston Crucial Samsung.")
+        def mock(req):
+            if req.url.host == "www.bing.com":
+                return httpx.Response(200,content=rss)
+            return httpx.Response(403)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as client:
+            found = await public_source_search(question,client=client)
+        self.assertFalse(any("woot.com" in x["url"] for x in found))
+
+    def test_brand_scoping_not_used_for_unrelated_questions(self):
+        from free_research import requested_product_institutions
+        self.assertEqual(requested_product_institutions("Python asyncio semaphore"), [])
+        self.assertEqual(requested_product_institutions("Kingston SSD specs"), ["kingston"])
+
     def test_long_multisource_question_finds_security_subject_not_conduct(self):
         q = ("Conduct independent, multi-source cybersecurity research as of 15 November 2026. "
              "Compare three account authentication methods: FIDO2 passkeys, authenticator-app "

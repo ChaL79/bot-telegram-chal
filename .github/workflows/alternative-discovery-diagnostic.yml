@@ -1,0 +1,175 @@
+name: Alternative public discovery diagnostic
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/alternative-discovery-diagnostic.yml'
+permissions:
+  contents: read
+jobs:
+  research-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install httpx==0.27.2
+      - name: Probe no-key search endpoints; no automated data publishing
+        run: |
+          python - <<'PY'
+          import asyncio, httpx, re
+          from urllib.parse import urlsplit
+          requests = [
+              ("bing_rss_plain", "https://www.bing.com/search", {"q":"NVMe SATA Kingston", "format":"rss", "mkt":"en-US"}),
+              ("bing_rss_site", "https://www.bing.com/search", {"q":"site:kingston.com NVMe SATA", "format":"rss", "mkt":"en-US"}),
+              ("bing_html", "https://www.bing.com/search", {"q":"NVMe SATA Kingston", "mkt":"en-US"}),
+              ("google_html", "https://www.google.com/search", {"q":"NVMe SATA Kingston", "num":"10"}),
+              ("ddg_html", "https://html.duckduckgo.com/html/", {"q":"NVMe SATA Kingston"}),
+              ("ddg_lite", "https://lite.duckduckgo.com/lite/", {"q":"NVMe SATA Kingston"}),
+              ("mojeek", "https://www.mojeek.com/search", {"q":"NVMe SATA Kingston"}),
+          ]
+          async def probe(item):
+              tag,url,params=item
+              try:
+                  async with httpx.AsyncClient(timeout=9,follow_redirects=False,headers={
+                      "User-Agent":"Mozilla/5.0 (compatible; ChaL79Bot/1.4; source discovery)",
+                      "Accept":"text/html,application/rss+xml,application/xml"
+                  }) as cli:
+                      r=await cli.get(url,params=params)
+                      body=r.text[:300000]
+                      domains=sorted(set(urlsplit(u).hostname or "" for u in re.findall(
+                          r'https?://[^\s"\'<>]{3,250}',body) if any(x in u for x in ('kingston','crucial','samsung'))))
+                      print("PROBE",tag,"HTTP",r.status_code,"BYTES",len(r.content),
+                            "OFFICIAL_HOSTS",domains[:9],"HAS_KINGSTON",body.lower().count("kingston"),
+                            "HAS_NVME",body.lower().count("nvme"),flush=True)
+              except Exception as exc:
+                  print("PROBE",tag,"ERROR",type(exc).__name__,flush=True)
+          from free_research import parse_rss, source_relevance, search_query_terms, requested_product_institutions
+          question = ("Bandingkan SSD NVMe PCIe dengan SSD SATA berdasarkan dokumentasi rasmi "
+                      "Kingston, Crucial dan Samsung. Terangkan kelajuan, latency, keserasian "
+                      "slot M.2, serta manfaat sebenar menaik taraf laptop lama.")
+          async def inspect_rss():
+              terms = search_query_terms(question)
+              print("SSD_TERMS", terms, "PRODUCTS", requested_product_institutions(question), flush=True)
+              probes = [("kingston", "site:www.kingston.com ssd nvme pcie"),
+                        ("crucial", "site:www.crucial.com ssd nvme pcie"),
+                        ("samsung", "site:semiconductor.samsung.com ssd nvme pcie"),
+                        ("kingston_short", "NVMe SATA Kingston"),
+                        ("crucial_short", "NVMe SATA Crucial"),
+                        ("samsung_short", "NVMe SATA Samsung"),
+                        ("ibm_short", "NVMe SATA IBM"),
+                        ("cisco_short", "NVMe PCIe Cisco"),
+                        ("nvme_explainer", "what is NVMe SSD PCIe SATA")]
+              async with httpx.AsyncClient(timeout=9) as cli:
+                  for label, q in probes:
+                      resp = await cli.get("https://www.bing.com/search",
+                                           params={"q":q,"format":"rss","mkt":"en-US"})
+                      items = parse_rss(resp.content,"diagnostic",10) if resp.status_code==200 else []
+                      print("SCOPED_RSS",label,"HTTP",resp.status_code,"COUNT",len(items),flush=True)
+                      for item in items[:8]:
+                          print("SCOPED_ITEM",label,"SCORE",source_relevance(item,terms),
+                                "URL",item["url"][:170],"TITLE",item["title"][:95],flush=True)
+          async def inspect_official_indices():
+              paths = [
+                  ("kingston_robots", "https://www.kingston.com/robots.txt"),
+                  ("kingston_sitemap", "https://www.kingston.com/sitemap.xml"),
+                  ("crucial_robots", "https://www.crucial.com/robots.txt"),
+                  ("crucial_sitemap", "https://www.crucial.com/sitemap.xml"),
+                  ("samsung_robots", "https://semiconductor.samsung.com/robots.txt"),
+                  ("samsung_sitemap", "https://semiconductor.samsung.com/sitemap.xml"),
+              ]
+              async with httpx.AsyncClient(timeout=10, follow_redirects=False) as cli:
+                  for name,url in paths:
+                      try:
+                          response = await cli.get(url, headers={"Accept":"application/xml,text/plain"})
+                          body = response.text[:250000].lower()
+                          idx = body.find("sitemap:")
+                          print("INDEX",name,"HTTP",response.status_code,"BYTES",len(response.content),
+                                "SITEMAP_FOUND",idx>=0,"NVME",body.count("nvme"),
+                                "SSD",body.count("ssd"),"EXAMPLE",repr(body[max(0,idx):idx+160]) if idx>=0 else "",flush=True)
+                      except Exception as exc:
+                          print("INDEX",name,"ERROR",type(exc).__name__,flush=True)
+          async def inspect_sitemap_articles():
+              import xml.etree.ElementTree as ET
+              targets = [("kingston","https://www.kingston.com/siteindex.xml"),
+                         ("samsung","https://semiconductor.samsung.com/sitemap.xml")]
+              async with httpx.AsyncClient(timeout=12,follow_redirects=False) as cli:
+                  for name,url in targets:
+                      try:
+                          response = await cli.get(url)
+                          print("INDEX_TARGET",name,"HTTP",response.status_code,
+                                "BYTES",len(response.content),flush=True)
+                          if response.status_code != 200 or len(response.content)>450000:
+                              continue
+                          root=ET.fromstring(response.content)
+                          links=[node.text or "" for node in root.iter() if node.tag.endswith("loc")]
+                          filtered=[u for u in links if any(w in u.casefold() for w in
+                                    ("nvme","sata","solid-state","consumer-storage","ssd"))]
+                          print("INDEX_URLS",name,"TOTAL",len(links),"MATCHES",len(filtered),flush=True)
+                          for u in filtered[:12]:
+                              print("INDEX_URL",name,u[:190],flush=True)
+                      except Exception as exc:
+                          print("INDEX_TARGET",name,"ERROR",type(exc).__name__,flush=True)
+          async def main():
+              await asyncio.gather(*(probe(item) for item in requests))
+              await inspect_rss()
+              await inspect_official_indices()
+              await inspect_sitemap_articles()
+              from public_article_reader import read_public_html
+              from source_reader import MainText, select_relevant_excerpt
+              urls = {
+                  "kingston": "https://www.kingston.com/en/ssd/what-is-nvme-ssd-technology",
+                  "samsung": "https://semiconductor.samsung.com/consumer-storage/support/faqs/internalssd-product-information/",
+                  "samsung_ssd": "https://semiconductor.samsung.com/ssd/pc-ssd/pm9e1/",
+                  "crucial": "https://www.crucial.com/articles/about-ssd/nvme-vs-sata",
+                  "kingston_faq": "https://www.kingston.com/en/ssd/ssd-faq",
+                  "netapp": "https://www.netapp.com/data-storage/nvme/what-is-nvme/",
+                  "cisco": "https://www.cisco.com/site/us/en/learn/topics/computing/what-is-nvme.html",
+                  "ibm": "https://www.ibm.com/think/topics/nvme",
+              }
+              async with httpx.AsyncClient(timeout=9,follow_redirects=False) as probe_cli:
+                  for label,url in urls.items():
+                      try:
+                          response=await probe_cli.get(url,headers={"Accept":"text/html"})
+                          print("DIRECT_STATUS",label,"HTTP",response.status_code,
+                                "MIME",response.headers.get("content-type","")[:70],
+                                "BYTES",len(response.content),
+                                "LOCATION_HOST",urlsplit(response.headers.get("location","")).hostname,
+                                flush=True)
+                      except Exception as exc:
+                          print("DIRECT_STATUS",label,"ERROR",type(exc).__name__,flush=True)
+              from html.parser import HTMLParser
+              class SafeBodyText(HTMLParser):
+                  blocked={"script","style","noscript","template","svg","nav","footer","header","aside"}
+                  def __init__(self):
+                      super().__init__(convert_charrefs=True)
+                      self.stack=[]; self.parts=[]; self.body=False
+                  def handle_starttag(self,tag,attrs):
+                      if tag=="body":self.body=True
+                      if tag in self.blocked:self.stack.append(tag)
+                      if tag in ("p","li","h1","h2","h3","div","section","br"):
+                          self.parts.append("\\n")
+                  def handle_endtag(self,tag):
+                      if tag=="body":self.body=False
+                      if tag in self.blocked and self.stack and self.stack[-1]==tag:self.stack.pop()
+                  def handle_data(self,data):
+                      if self.body and not self.stack:self.parts.append(data)
+              for label,url in urls.items():
+                  html = await read_public_html(url)
+                  parser=MainText()
+                  fallback=SafeBodyText()
+                  if html:
+                      parser.feed(html)
+                      fallback.feed(html)
+                  extracted=select_relevant_excerpt(parser.content(), question)
+                  alt_text=" ".join(fallback.parts)
+                  alt=select_relevant_excerpt(alt_text,question)
+                  print("ACTUAL_ARTICLE",label,"HTML",len(html),"TEXT",len(parser.content()),
+                        "EXCERPT",len(extracted),"PREVIEW",repr(extracted[:130]),flush=True)
+                  print("BODY_FALLBACK",label,"BODY_CHARS",len(alt_text),"EXCERPT",len(alt),
+                        "PREVIEW",repr(alt[:150]),flush=True)
+          asyncio.run(main())
+          PY

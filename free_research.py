@@ -45,6 +45,38 @@ ACCESSIBILITY_SOURCE_HOSTS = {
     "mdn": "developer.mozilla.org",
     "govuk": "www.gov.uk",
 }
+# Reviewed domains for explicit brand-scoped discovery; no article URLs guessed.
+PRODUCT_OFFICIAL_DOMAINS = {
+    "kingston": ("www.kingston.com",),
+    "crucial": ("www.crucial.com",),
+    "samsung": ("semiconductor.samsung.com",),
+}
+
+# Sitemap INDEX endpoints independently checked against manufacturer robots.txt.
+# Never treat a sitemap URL as article content; each page must be fetched.
+PRODUCT_OFFICIAL_SITEMAPS = {
+    "samsung": "https://semiconductor.samsung.com/sitemap.xml",
+}
+MAX_SITEMAP_BYTES = 350_000
+
+# Marketplace product offers are not technical documentation evidence.
+RESEARCH_MARKETPLACE_HOSTS = frozenset({
+    "woot.com", "amazon.com", "ebay.com", "bestbuy.com", "newegg.com",
+})
+
+
+def is_marketplace_listing(url: str) -> bool:
+    host = urlsplit(url).hostname or ""
+    return any(host == base or host.endswith("." + base)
+               for base in RESEARCH_MARKETPLACE_HOSTS)
+
+
+
+def requested_product_institutions(question: str) -> list[str]:
+    return [name for name in PRODUCT_OFFICIAL_DOMAINS
+            if re.search(r"\b" + re.escape(name) + r"\b", question, re.I)][:3]
+
+
 ACCESSIBILITY_TOPIC_WORDS = frozenset({
     "wcag", "accessibility", "accessible", "keyboard", "focus",
     "visibility", "visible", "obscured", "testing", "test",
@@ -427,9 +459,10 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
     if not terms:
         return []
     query_text = query
-    # Search public indexes with core concepts, not a 12-term AND-like
-    # sentence containing vendors, commentary, and unrelated instructions.
-    query = " ".join(terms[:6])[:160]
+    named_product_orgs = requested_product_institutions(query_text)
+    subject_terms = [word for word in terms if word not in named_product_orgs]
+    query = " ".join((subject_terms[:4] if len(named_product_orgs) >= 2
+                      and len(subject_terms) >= 2 else terms[:6]))[:160]
 
     async def search(session: httpx.AsyncClient) -> list[dict]:
         tech = technical_topic(terms)
@@ -454,7 +487,9 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
             # A second, independent concise query makes discovery less brittle
             # without using a paid API or broadening the reader's URL policy.
             key_terms = [term for term in terms if len(term) >= 5 and term not in {"wifi"}]
-            short_query = " ".join(key_terms[:2])[:80]
+            short_query = (" ".join([term for term in ("nvme", "sata", "ssd") if term in subject_terms][:2])
+                           if len(named_product_orgs) >= 2
+                           else " ".join(key_terms[:2])[:80])
             if (organizations or accessibility_orgs or len(terms) <= 5
                     or not short_query or short_query == query):
                 return []
@@ -469,6 +504,88 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
             items = parse_rss(resp.content, "Bing concise web-search RSS", 10)
             log.info("Bing concise RSS parsed %d metadata results", len(items))
             return items
+
+        async def get_product_site(org: str) -> list[dict]:
+            # Bing RSS can ignore site: and return unrelated retail results.
+            # Use subject-led named-maker search, then enforce exact host matching.
+            q_terms = [term for term in ("nvme", "sata", "ssd", "pcie")
+                       if term in subject_terms]
+            q = " ".join((q_terms[:3] or subject_terms[:3]) + [org])
+            resp = await session.get("https://www.bing.com/search",
+                                     params={"q": q, "format": "rss", "mkt": "en-US"},
+                                     timeout=7.0)
+            if resp.status_code != 200:
+                return []
+            items = parse_rss(resp.content, "Official product institution via Bing RSS", 10)
+            found = [item for item in items
+                     if urlsplit(item["url"]).hostname in PRODUCT_OFFICIAL_DOMAINS[org]
+                     and not urlsplit(item["url"]).path.casefold().endswith((".pdf", ".xml", ".json"))]
+            log.info("Product official discovery org=%s candidates=%d", org, len(found))
+            return found[:4]
+
+        async def get_product_sitemap(org: str) -> list[dict]:
+            """Read a fixed manufacturer sitemap, never arbitrary user XML URLs."""
+            endpoint = PRODUCT_OFFICIAL_SITEMAPS.get(org)
+            if not endpoint:
+                return []
+            expected_host = PRODUCT_OFFICIAL_DOMAINS[org][0]
+            if urlsplit(endpoint).hostname != expected_host:
+                return []
+            data = bytearray()
+            try:
+                async with session.stream(
+                    "GET", endpoint, follow_redirects=False,
+                    headers={"Accept": "application/xml,text/xml"},
+                    timeout=7.0,
+                ) as response:
+                    if response.status_code != 200:
+                        return []
+                    ctype = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+                    if ctype not in ("application/xml", "text/xml", "text/plain", "application/octet-stream"):
+                        return []
+                    length = response.headers.get("content-length", "")
+                    if length.isdecimal() and int(length) > MAX_SITEMAP_BYTES:
+                        return []
+                    async for part in response.aiter_bytes():
+                        data.extend(part)
+                        if len(data) > MAX_SITEMAP_BYTES:
+                            return []
+            except (httpx.HTTPError, OSError, ValueError):
+                return []
+            if b"<!DOCTYPE" in data.upper() or b"<!ENTITY" in data.upper():
+                return []
+            try:
+                root = ElementTree.fromstring(bytes(data))
+            except ElementTree.ParseError:
+                return []
+            candidates = []
+            for node in root.iter():
+                if not node.tag.endswith("}loc") and node.tag != "loc":
+                    continue
+                url = (node.text or "").strip()
+                if not safe_public_article_url(url):
+                    continue
+                parsed = urlsplit(url)
+                if parsed.hostname != expected_host:
+                    continue
+                path = parsed.path.casefold()
+                if not any(x in path for x in ("ssd", "nvme", "sata")):
+                    continue
+                relevance = (70 if "internalssd-product-information" in path else
+                             55 if "nvme" in path or "sata" in path else
+                             40 if "/support/faqs/internalssd" in path else
+                             20 if "/support/" in path else 5)
+                candidates.append((relevance, {
+                    "provider": "Official manufacturer sitemap URL (page not read)",
+                    "title": org.capitalize() + " " + parsed.path.rstrip("/").split("/")[-1].replace("-", " "),
+                    "url": url, "snippet": "", "published": "",
+                }))
+                if len(candidates) >= 300:
+                    break
+            candidates.sort(key=lambda pair: pair[0], reverse=True)
+            log.info("Manufacturer sitemap org=%s relevant_urls=%d",
+                     org, len(candidates))
+            return [item for _, item in candidates[:3]]
 
         # Independent official sources are discovered through the same free
         # Bing RSS endpoint, without constructing or guessing document URLs.
@@ -599,6 +716,10 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
             return items
 
         providers = [get_bing(), get_bing_short(), get_wikipedia(), get_news()]
+        if len(named_product_orgs) >= 2:
+            providers.extend(get_product_site(org) for org in named_product_orgs)
+            providers.extend(get_product_sitemap(org) for org in named_product_orgs
+                             if org in PRODUCT_OFFICIAL_SITEMAPS)
         providers.extend(get_official_site(org) for org in organizations)
         providers.extend(get_accessibility_site(org) for org in accessibility_orgs)
         if tech:
@@ -615,7 +736,25 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
                 if item["url"] in urls:
                     continue
                 urls.add(item["url"])
+                # Explicit documentation comparisons must not be supported by
+                # storefront listings, even when the title mentions NVMe/SATA.
+                if (len(named_product_orgs) >= 2
+                        and re.search(r"\b(?:rasmi|dokumentasi|documentation|official)\b",
+                                      query_text, re.I)
+                        and is_marketplace_listing(item["url"])):
+                    continue
                 score = source_relevance(item, terms)
+                # Trusted sitemap path proves discovery of a URL, NOT page content.
+                # It is eligible for article reading only in an explicitly named
+                # maker/SSD comparison and must still pass the pinned HTML reader.
+                if (item.get("provider") ==
+                        "Official manufacturer sitemap URL (page not read)"
+                        and len(named_product_orgs) >= 2
+                        and "ssd" in terms
+                        and any(urlsplit(item["url"]).hostname in PRODUCT_OFFICIAL_DOMAINS[org]
+                                for org in named_product_orgs)
+                        and safe_public_article_url(item["url"])):
+                    score = max(score, 6)
                 if score > 0:
                     ranked.append((score, item))
         ranked.sort(key=lambda pair: pair[0], reverse=True)
@@ -624,6 +763,18 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
         # Preserve institution-specific ranking for the curated protocols.
         if not organizations and not accessibility_orgs:
             ranked = prioritize_readable_sources(ranked)
+        # Preserve distinct official sources before generic indexing results.
+        if len(named_product_orgs) >= 2:
+            official, selected_urls = [], set()
+            for org in named_product_orgs:
+                for pair in ranked:
+                    if (urlsplit(pair[1]["url"]).hostname in PRODUCT_OFFICIAL_DOMAINS[org]
+                            and pair[1]["url"] not in selected_urls):
+                        official.append(pair)
+                        selected_urls.add(pair[1]["url"])
+                        break
+            ranked = official + [pair for pair in ranked
+                                 if pair[1]["url"] not in selected_urls]
         # Prefer one strongly-relevant article from each requested institution,
         # instead of three near-duplicate pages from a single organization.
         if len(organizations) >= 2 or len(accessibility_orgs) >= 2:

@@ -348,6 +348,65 @@ class MainText(HTMLParser):
         )
 
 
+class BoundedBodyText(HTMLParser):
+    """Conservative fallback for public pages lacking <main>/<article>.
+
+    Extract only visible body text. Never include script/style/template/nav,
+    and bound retained text even if a malformed or huge document is supplied.
+    """
+    SKIP = frozenset({"script", "style", "template", "noscript", "svg",
+                      "nav", "footer", "header", "aside"})
+    BREAKS = frozenset({"p", "li", "h1", "h2", "h3", "h4",
+                        "section", "div", "br", "tr", "blockquote"})
+    MAX_TEXT = 120_000
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.in_body = False
+        self.body_depth = 0
+        self.skipped = []
+        self.fragments = []
+        self.size = 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "body":
+            self.in_body = True
+            self.body_depth += 1
+        if not self.in_body:
+            return
+        if tag in self.SKIP:
+            self.skipped.append(tag)
+        if not self.skipped and tag in self.BREAKS:
+            self._append("\n")
+
+    def handle_endtag(self, tag):
+        if self.in_body and tag in self.SKIP and self.skipped and self.skipped[-1] == tag:
+            self.skipped.pop()
+        if self.in_body and not self.skipped and tag in self.BREAKS:
+            self._append("\n")
+        if tag == "body":
+            self.body_depth = max(0, self.body_depth - 1)
+            if self.body_depth == 0:
+                self.in_body = False
+
+    def _append(self, data):
+        if self.size >= self.MAX_TEXT:
+            return
+        chunk = data[:self.MAX_TEXT - self.size]
+        self.fragments.append(chunk)
+        self.size += len(chunk)
+
+    def handle_data(self, data):
+        if self.in_body and not self.skipped and data.strip():
+            self._append(data)
+
+    def content(self):
+        return "\n".join(
+            clean(row, 650) for row in "".join(self.fragments).splitlines()
+            if clean(row, 650)
+        )
+
+
 # Model-specific price tables are easily lost on long pages when a generic
 # keyword scorer returns six unrelated lines from other models.
 _PRICING_MODEL_SECTIONS = (
@@ -641,6 +700,30 @@ def recommended_official_docs(question: str) -> list[dict]:
     return refs
 
 
+# Independently verified public technical article, not a named SSD manufacturer.
+# Used as a clearly labeled supplemental source for NVMe/SATA comparisons only.
+# It remains unverified evidence until actually fetched and excerpted.
+SSD_SECONDARY_TECH_REFERENCE = (
+    "https://www.ibm.com/think/topics/nvme",
+    "IBM: NVMe protocol and SATA SSD technical explanation",
+)
+
+
+def ssd_support_reference(question: str, sources: list[dict]) -> list[dict]:
+    from free_research import requested_product_institutions
+    terms = set(search_query_terms(question))
+    if (len(requested_product_institutions(question)) < 2
+            or not {"ssd", "nvme", "sata"}.issubset(terms)):
+        return []
+    url, title = SSD_SECONDARY_TECH_REFERENCE
+    if any(ref.get("url") == url for ref in sources):
+        return []
+    if not safe_public_article_url(url):
+        return []
+    return [{"provider": "Reviewed secondary technical documentation (IBM; not requested SSD maker)",
+             "title": title, "url": url, "snippet": "", "published": ""}]
+
+
 async def enrich_with_read_excerpts(
     question: str, sources: list[dict], *,
     client: Optional[httpx.AsyncClient] = None
@@ -682,7 +765,15 @@ async def enrich_with_read_excerpts(
         # the independent MDN and GOV.UK evidence entirely.
         targeted = [ref for ref in sources
                     if urlsplit(ref.get("url", "")).hostname in wanted_hosts]
-        for ref in targeted + fallback_refs + sources:
+        secondary = ssd_support_reference(question, sources)
+        # Prioritize a requested maker's discovered page, then an independently
+        # reviewed technical explanation. Remaining manufacturers follow.
+        from free_research import requested_product_institutions, PRODUCT_OFFICIAL_DOMAINS
+        named_makers = requested_product_institutions(question)
+        first_maker = [ref for ref in sources if any(
+            urlsplit(ref.get("url", "")).hostname in PRODUCT_OFFICIAL_DOMAINS[org]
+            for org in named_makers)][:1]
+        for ref in targeted + fallback_refs + first_maker + secondary + sources:
             url = ref.get("url", "")
             host = urlsplit(url).hostname
             if (len(approved_candidates) >= capacity or url in seen
@@ -714,7 +805,14 @@ async def enrich_with_read_excerpts(
             if page_html:
                 parser = MainText()
                 parser.feed(page_html)
-                excerpt = select_relevant_excerpt(parser.content(), question)
+                main_text = parser.content()
+                if not main_text:
+                    # Some genuine documentation sites use a plain body
+                    # rather than semantic main/article containers.
+                    fallback = BoundedBodyText()
+                    fallback.feed(page_html)
+                    main_text = fallback.content()
+                excerpt = select_relevant_excerpt(main_text, question)
                 if excerpt and len(excerpt) < 65:
                     excerpt = ""
             else:
