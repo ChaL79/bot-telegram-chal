@@ -710,10 +710,13 @@ SSD_SECONDARY_TECH_REFERENCE = (
 
 
 def ssd_support_reference(question: str, sources: list[dict]) -> list[dict]:
-    from free_research import requested_product_institutions
+    from free_research import requested_ssd_manufacturers
     terms = set(search_query_terms(question))
-    if (len(requested_product_institutions(question)) < 2
-            or not {"ssd", "nvme", "sata"}.issubset(terms)):
+    explicitly_requests_ibm = bool(re.search(r"\bIBM\b", question, re.I))
+    makers = requested_ssd_manufacturers(question)
+    if not {"ssd", "nvme", "sata"}.issubset(terms):
+        return []
+    if len(makers) < 2 and not (makers and explicitly_requests_ibm):
         return []
     url, title = SSD_SECONDARY_TECH_REFERENCE
     if any(ref.get("url") == url for ref in sources):
@@ -768,8 +771,8 @@ async def enrich_with_read_excerpts(
         secondary = ssd_support_reference(question, sources)
         # Prioritize a requested maker's discovered page, then an independently
         # reviewed technical explanation. Remaining manufacturers follow.
-        from free_research import requested_product_institutions, PRODUCT_OFFICIAL_DOMAINS
-        named_makers = requested_product_institutions(question)
+        from free_research import requested_ssd_manufacturers, PRODUCT_OFFICIAL_DOMAINS
+        named_makers = requested_ssd_manufacturers(question)
         first_maker = [ref for ref in sources if any(
             urlsplit(ref.get("url", "")).hostname in PRODUCT_OFFICIAL_DOMAINS[org]
             for org in named_makers)][:1]
