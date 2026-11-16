@@ -50,6 +50,7 @@ jobs:
               targets = {
                   "TP-Link": "https://www.tp-link.com/us/wifi7/",
                   "Intel": "https://www.intel.com/content/www/us/en/products/details/wireless/wi-fi-7-series.html",
+                  "NETGEAR": "https://www.netgear.com/home/discover/wifi7/",
               }
               fetched = []
               for name, url in targets.items():
