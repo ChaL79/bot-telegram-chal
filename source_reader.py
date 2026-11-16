@@ -731,6 +731,32 @@ def requested_fatigue_official_refs(question: str, sources: list[dict]) -> list[
     return refs
 
 
+# Small reviewed set of public pages that previously yielded real HTML.
+# Only for Wi-Fi 7 vs Wi-Fi 6 comparisons when public search is saturated by
+# news redirect wrappers. The actual page must be fetched and parsed again.
+WIFI7_COMPARISON_DOCS = (
+    ("https://www.intel.com/content/www/us/en/products/details/wireless/wi-fi-7-series.html",
+     "Intel: Wi-Fi 7 wireless products and technology"),
+    ("https://www.spectrum.com/resources/internet-wifi/what-is-wifi-7",
+     "Spectrum: What Is Wi-Fi 7?"),
+    ("https://www.highspeedinternet.com/resources/what-is-wi-fi-7",
+     "HighSpeedInternet: What is Wi-Fi 7?"),
+)
+
+
+def wifi7_comparison_recovery(question: str, sources: list[dict]) -> list[dict]:
+    terms = set(search_query_terms(question))
+    if not {"wifi7", "wifi6"}.issubset(terms):
+        return []
+    # No fabricated pages; this is a reviewed recovery reference, not a claim
+    # that a website is currently accessible or its content has been read.
+    discovered = {ref.get("url") for ref in sources}
+    return [{"provider": "Reviewed Wi-Fi comparison page (not yet read)",
+             "title": title, "url": url, "snippet": "", "published": ""}
+            for url, title in WIFI7_COMPARISON_DOCS
+            if url not in discovered and safe_public_article_url(url)]
+
+
 # Independently verified public technical article, not a named SSD manufacturer.
 # Used as a clearly labeled supplemental source for NVMe/SATA comparisons only.
 # It remains unverified evidence until actually fetched and excerpted.
@@ -790,7 +816,8 @@ async def enrich_with_read_excerpts(
     fallback_refs = []
     if os.environ.get("ENABLE_GENERAL_PUBLIC_READER", "0") == "1" and not official_google and not identity_docs:
         fallback_refs = (accessibility_official_fallbacks(question, sources)
-                         + requested_fatigue_official_refs(question, sources))
+                         + requested_fatigue_official_refs(question, sources)
+                         + wifi7_comparison_recovery(question, sources))
         wanted_hosts = requested_wcag_hosts(question)
         # Prefer independent hostnames: three W3C navigation pages should not
         # crowd out an MDN or GOV.UK result already found by public search.
