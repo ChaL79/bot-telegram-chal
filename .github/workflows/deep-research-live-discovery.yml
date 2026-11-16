@@ -45,6 +45,25 @@ jobs:
                   for entry in raw:
                       print("RAW_RELEVANCE", source_relevance(entry, terms),
                             "TITLE", entry["title"][:95], "HOST", httpx.URL(entry["url"]).host, flush=True)
+              from public_article_reader import read_public_html
+              from source_reader import MainText, select_relevant_excerpt
+              targets = {
+                  "TP-Link": "https://www.tp-link.com/us/wifi7/",
+                  "Intel": "https://www.intel.com/content/www/us/en/products/details/wireless/wi-fi-7-series.html",
+              }
+              fetched = []
+              for name, url in targets.items():
+                  html = await read_public_html(url)
+                  excerpt = ""
+                  if html:
+                      parser = MainText()
+                      parser.feed(html)
+                      excerpt = select_relevant_excerpt(parser.content(), full)
+                  print("REAL_PAGE", name, "html_chars", len(html),
+                        "excerpt_chars", len(excerpt), flush=True)
+                  if excerpt and len(excerpt) >= 65:
+                      fetched.append(name)
+              print("REAL_READ_SUCCESS", fetched, flush=True)
               found = await public_source_search(full)
               print("SELECTED", len(found), flush=True)
               for entry in found:
