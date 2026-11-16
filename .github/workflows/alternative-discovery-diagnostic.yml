@@ -123,6 +123,9 @@ jobs:
                   "samsung_ssd": "https://semiconductor.samsung.com/ssd/pc-ssd/pm9e1/",
                   "crucial": "https://www.crucial.com/articles/about-ssd/nvme-vs-sata",
                   "kingston_faq": "https://www.kingston.com/en/ssd/ssd-faq",
+                  "netapp": "https://www.netapp.com/data-storage/nvme/what-is-nvme/",
+                  "cisco": "https://www.cisco.com/site/us/en/learn/topics/computing/what-is-nvme.html",
+                  "ibm": "https://www.ibm.com/think/topics/nvme",
               }
               async with httpx.AsyncClient(timeout=9,follow_redirects=False) as probe_cli:
                   for label,url in urls.items():
