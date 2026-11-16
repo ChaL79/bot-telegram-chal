@@ -1,0 +1,55 @@
+name: Deep research live search diagnostic
+on:
+  pull_request:
+    paths:
+      - 'free_research.py'
+      - 'test_free_research.py'
+      - '.github/workflows/deep-research-live-discovery.yml'
+permissions:
+  contents: read
+jobs:
+  live-wifi-discovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements.txt
+      - name: Live public RSS + bounded relevance diagnostic (no secrets)
+        env:
+          ENABLE_GENERAL_PUBLIC_READER: '0'
+        run: |
+          python - <<'PY'
+          import asyncio
+          import httpx
+          from free_research import public_source_search, search_query_terms, parse_rss, source_relevance
+          full = ("Deep research: Bandingkan Wi-Fi 7 dengan Wi-Fi 6 berdasarkan sumber rasmi "
+                  "Wi-Fi Alliance, Intel dan TP-Link. Semak perbezaan kelajuan, latency, "
+                  "jalur 6 GHz, Multi-Link Operation (MLO), dan manfaat sebenar untuk internet "
+                  "rumah 500 Mbps. Cuba baca kandungan HTML sebenar daripada sekurang-kurangnya "
+                  "dua domain berbeza. Sertakan URL, petikan sebenar setiap halaman yang "
+                  "berjaya dibaca, dan asingkan sumber metadata sahaja atau gagal diakses.")
+          async def main():
+              terms = search_query_terms(full)
+              print("TERMS", terms, flush=True)
+              actual_query = " ".join(terms[:6])[:160]
+              async with httpx.AsyncClient(timeout=10.0) as cli:
+                  r = await cli.get("https://www.bing.com/search",
+                                    params={"q": actual_query, "format": "rss", "mkt": "en-US"})
+                  raw = parse_rss(r.content, "Bing RSS", 10) if r.status_code == 200 else []
+                  print("BING_HTTP", r.status_code, "RSS_RESULTS", len(raw), flush=True)
+                  for entry in raw:
+                      print("RAW_RELEVANCE", source_relevance(entry, terms),
+                            "TITLE", entry["title"][:95], "HOST", httpx.URL(entry["url"]).host, flush=True)
+              found = await public_source_search(full)
+              print("SELECTED", len(found), flush=True)
+              for entry in found:
+                  print("SOURCE", entry["title"][:95], entry["url"], flush=True)
+              if not found:
+                  raise AssertionError("No relevant live sources for Wi-Fi 7 test prompt")
+          asyncio.run(main())
+          PY
