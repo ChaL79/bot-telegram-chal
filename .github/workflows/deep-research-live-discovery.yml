@@ -44,7 +44,8 @@ jobs:
                   print("BING_HTTP", r.status_code, "RSS_RESULTS", len(raw), flush=True)
                   for entry in raw:
                       print("RAW_RELEVANCE", source_relevance(entry, terms),
-                            "TITLE", entry["title"][:95], "HOST", httpx.URL(entry["url"]).host, flush=True)
+                            "TITLE", entry["title"][:95], "HOST", httpx.URL(entry["url"]).host,
+                            "URL", entry["url"][:170], flush=True)
               from public_article_reader import read_public_html
               from source_reader import MainText, select_relevant_excerpt
               targets = {
@@ -63,7 +64,10 @@ jobs:
                   if html:
                       parser = MainText()
                       parser.feed(html)
-                      excerpt = select_relevant_excerpt(parser.content(), full)
+                      main_text = parser.content()
+                  print("EXTRACTION_DIAGNOSTIC", name, "main_chars", len(main_text),
+                        "main_preview", repr(main_text[:140]), flush=True)
+                  excerpt = select_relevant_excerpt(main_text, full)
                   print("REAL_PAGE", name, "html_chars", len(html),
                         "excerpt_chars", len(excerpt), flush=True)
                   if excerpt and len(excerpt) >= 65:
