@@ -168,8 +168,8 @@ def verified_source_quotes(sources: list[dict], *, limit_words: int = 20) -> str
         lines.append(f'[{number}] {title}\nURL: {url}\nPetikan disahkan: "{quote}"')
     if not lines:
         return ""
-    return "\n\nPetikan asli disahkan secara automatik daripada halaman yang dibaca "
-           "(maksimum 20 perkataan setiap sumber):\n" + "\n\n".join(lines)
+    return ("\n\nPetikan asli disahkan secara automatik daripada halaman yang dibaca "
+            "(maksimum 20 perkataan setiap sumber):\n" + "\n\n".join(lines))
 
 
 def suppress_model_quotes(answer: str) -> str:
