@@ -52,6 +52,13 @@ PRODUCT_OFFICIAL_DOMAINS = {
     "samsung": ("semiconductor.samsung.com",),
 }
 
+# Sitemap INDEX endpoints independently checked against manufacturer robots.txt.
+# Never treat a sitemap URL as article content; each page must be fetched.
+PRODUCT_OFFICIAL_SITEMAPS = {
+    "samsung": "https://semiconductor.samsung.com/sitemap.xml",
+}
+MAX_SITEMAP_BYTES = 350_000
+
 
 def requested_product_institutions(question: str) -> list[str]:
     return [name for name in PRODUCT_OFFICIAL_DOMAINS
@@ -502,6 +509,70 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
             log.info("Product official discovery org=%s candidates=%d", org, len(found))
             return found[:4]
 
+        async def get_product_sitemap(org: str) -> list[dict]:
+            """Read a fixed manufacturer sitemap, never arbitrary user XML URLs."""
+            endpoint = PRODUCT_OFFICIAL_SITEMAPS.get(org)
+            if not endpoint:
+                return []
+            expected_host = PRODUCT_OFFICIAL_DOMAINS[org][0]
+            if urlsplit(endpoint).hostname != expected_host:
+                return []
+            data = bytearray()
+            try:
+                async with session.stream(
+                    "GET", endpoint, follow_redirects=False,
+                    headers={"Accept": "application/xml,text/xml"},
+                    timeout=7.0,
+                ) as response:
+                    if response.status_code != 200:
+                        return []
+                    ctype = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+                    if ctype not in ("application/xml", "text/xml", "text/plain", "application/octet-stream"):
+                        return []
+                    length = response.headers.get("content-length", "")
+                    if length.isdecimal() and int(length) > MAX_SITEMAP_BYTES:
+                        return []
+                    async for part in response.aiter_bytes():
+                        data.extend(part)
+                        if len(data) > MAX_SITEMAP_BYTES:
+                            return []
+            except (httpx.HTTPError, OSError, ValueError):
+                return []
+            if b"<!DOCTYPE" in data.upper() or b"<!ENTITY" in data.upper():
+                return []
+            try:
+                root = ElementTree.fromstring(bytes(data))
+            except ElementTree.ParseError:
+                return []
+            candidates = []
+            for node in root.iter():
+                if not node.tag.endswith("}loc") and node.tag != "loc":
+                    continue
+                url = (node.text or "").strip()
+                if not safe_public_article_url(url):
+                    continue
+                parsed = urlsplit(url)
+                if parsed.hostname != expected_host:
+                    continue
+                path = parsed.path.casefold()
+                if not any(x in path for x in ("ssd", "nvme", "sata")):
+                    continue
+                relevance = (70 if "internalssd-product-information" in path else
+                             55 if "nvme" in path or "sata" in path else
+                             40 if "/support/faqs/internalssd" in path else
+                             20 if "/support/" in path else 5)
+                candidates.append((relevance, {
+                    "provider": "Official manufacturer sitemap URL (page not read)",
+                    "title": org.capitalize() + " " + parsed.path.rstrip("/").split("/")[-1].replace("-", " "),
+                    "url": url, "snippet": "", "published": "",
+                }))
+                if len(candidates) >= 300:
+                    break
+            candidates.sort(key=lambda pair: pair[0], reverse=True)
+            log.info("Manufacturer sitemap org=%s relevant_urls=%d",
+                     org, len(candidates))
+            return [item for _, item in candidates[:3]]
+
         # Independent official sources are discovered through the same free
         # Bing RSS endpoint, without constructing or guessing document URLs.
         # One short site-scoped lookup per organization, max three in total.
@@ -633,6 +704,8 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
         providers = [get_bing(), get_bing_short(), get_wikipedia(), get_news()]
         if len(named_product_orgs) >= 2:
             providers.extend(get_product_site(org) for org in named_product_orgs)
+            providers.extend(get_product_sitemap(org) for org in named_product_orgs
+                             if org in PRODUCT_OFFICIAL_SITEMAPS)
         providers.extend(get_official_site(org) for org in organizations)
         providers.extend(get_accessibility_site(org) for org in accessibility_orgs)
         if tech:
@@ -650,6 +723,17 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
                     continue
                 urls.add(item["url"])
                 score = source_relevance(item, terms)
+                # Trusted sitemap path proves discovery of a URL, NOT page content.
+                # It is eligible for article reading only in an explicitly named
+                # maker/SSD comparison and must still pass the pinned HTML reader.
+                if (item.get("provider") ==
+                        "Official manufacturer sitemap URL (page not read)"
+                        and len(named_product_orgs) >= 2
+                        and "ssd" in terms
+                        and any(urlsplit(item["url"]).hostname in PRODUCT_OFFICIAL_DOMAINS[org]
+                                for org in named_product_orgs)
+                        and safe_public_article_url(item["url"])):
+                    score = max(score, 6)
                 if score > 0:
                     ranked.append((score, item))
         ranked.sort(key=lambda pair: pair[0], reverse=True)
