@@ -700,6 +700,37 @@ def recommended_official_docs(question: str) -> list[dict]:
     return refs
 
 
+# Reviewed first-party public articles for explicitly requested workplace fatigue
+# research. Fixed editorial references are candidates, not verified excerpts:
+# the DNS-pinned public reader must fetch the HTML before attribution.
+OCCUPATIONAL_FATIGUE_DOCS = (
+    ("https://www.cdc.gov/niosh/fatigue/about/index.html",
+     "CDC/NIOSH: Fatigue and Work", "www.cdc.gov", "cdc"),
+    ("https://www.hse.gov.uk/humanfactors/topics/fatigue.htm",
+     "UK HSE: Fatigue and shift work", "www.hse.gov.uk", "hse"),
+)
+
+
+def requested_fatigue_official_refs(question: str, sources: list[dict]) -> list[dict]:
+    terms = set(search_query_terms(question))
+    if ("fatigue" not in terms
+            or not ({"shift", "work", "sleep", "safety"} & terms)):
+        return []
+    named_cdc = bool(re.search(r"\\b(?:CDC|NIOSH)\\b", question, re.I))
+    named_hse = bool(re.search(r"\\bHSE\\b", question, re.I))
+    discovered = {urlsplit(ref.get("url", "")).hostname for ref in sources}
+    refs = []
+    for url, title, host, org in OCCUPATIONAL_FATIGUE_DOCS:
+        if not ((org == "cdc" and named_cdc)
+                or (org == "hse" and named_hse)):
+            continue
+        if host in discovered or not safe_public_article_url(url):
+            continue
+        refs.append({"provider": "Reviewed official occupational fatigue documentation (not yet read)",
+                     "title": title, "url": url, "snippet": "", "published": ""})
+    return refs
+
+
 # Independently verified public technical article, not a named SSD manufacturer.
 # Used as a clearly labeled supplemental source for NVMe/SATA comparisons only.
 # It remains unverified evidence until actually fetched and excerpted.
@@ -758,7 +789,8 @@ async def enrich_with_read_excerpts(
     general_candidate_urls = set()
     fallback_refs = []
     if os.environ.get("ENABLE_GENERAL_PUBLIC_READER", "0") == "1" and not official_google and not identity_docs:
-        fallback_refs = accessibility_official_fallbacks(question, sources)
+        fallback_refs = (accessibility_official_fallbacks(question, sources)
+                         + requested_fatigue_official_refs(question, sources))
         wanted_hosts = requested_wcag_hosts(question)
         # Prefer independent hostnames: three W3C navigation pages should not
         # crowd out an MDN or GOV.UK result already found by public search.
