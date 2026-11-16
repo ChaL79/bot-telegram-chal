@@ -700,6 +700,30 @@ def recommended_official_docs(question: str) -> list[dict]:
     return refs
 
 
+# Independently verified public technical article, not a named SSD manufacturer.
+# Used as a clearly labeled supplemental source for NVMe/SATA comparisons only.
+# It remains unverified evidence until actually fetched and excerpted.
+SSD_SECONDARY_TECH_REFERENCE = (
+    "https://www.ibm.com/think/topics/nvme",
+    "IBM: NVMe protocol and SATA SSD technical explanation",
+)
+
+
+def ssd_support_reference(question: str, sources: list[dict]) -> list[dict]:
+    from free_research import requested_product_institutions
+    terms = set(search_query_terms(question))
+    if (len(requested_product_institutions(question)) < 2
+            or not {"ssd", "nvme", "sata"}.issubset(terms)):
+        return []
+    url, title = SSD_SECONDARY_TECH_REFERENCE
+    if any(ref.get("url") == url for ref in sources):
+        return []
+    if not safe_public_article_url(url):
+        return []
+    return [{"provider": "Reviewed secondary technical documentation (IBM; not requested SSD maker)",
+             "title": title, "url": url, "snippet": "", "published": ""}]
+
+
 async def enrich_with_read_excerpts(
     question: str, sources: list[dict], *,
     client: Optional[httpx.AsyncClient] = None
@@ -741,7 +765,15 @@ async def enrich_with_read_excerpts(
         # the independent MDN and GOV.UK evidence entirely.
         targeted = [ref for ref in sources
                     if urlsplit(ref.get("url", "")).hostname in wanted_hosts]
-        for ref in targeted + fallback_refs + sources:
+        secondary = ssd_support_reference(question, sources)
+        # Prioritize a requested maker's discovered page, then an independently
+        # reviewed technical explanation. Remaining manufacturers follow.
+        from free_research import requested_product_institutions, PRODUCT_OFFICIAL_DOMAINS
+        named_makers = requested_product_institutions(question)
+        first_maker = [ref for ref in sources if any(
+            urlsplit(ref.get("url", "")).hostname in PRODUCT_OFFICIAL_DOMAINS[org]
+            for org in named_makers)][:1]
+        for ref in targeted + fallback_refs + first_maker + secondary + sources:
             url = ref.get("url", "")
             host = urlsplit(url).hostname
             if (len(approved_candidates) >= capacity or url in seen
