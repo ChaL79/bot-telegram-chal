@@ -122,6 +122,38 @@ def accessibility_official_fallbacks(question: str, sources: list[dict]) -> list
     return out
 
 
+# Explicitly named Wi-Fi institutions. Absence from public search results is
+# NOT evidence that their website was attempted or inaccessible.
+WIFI_NAMED_OFFICIAL_SITES = (
+    ("Wi-Fi Alliance", r"\bwi[\s-]*fi\s+alliance\b", "wi-fi.org"),
+    ("Intel", r"\bintel\b", "intel.com"),
+    ("TP-Link", r"\btp[\s-]*link\b", "tp-link.com"),
+)
+
+
+def missing_named_official_sites(question: str, discovered: list[dict]) -> list[dict]:
+    """Report explicitly requested Wi-Fi institutions not discovered by search.
+
+    These entries deliberately have no URL, excerpt or claim of any fetch.
+    Do not fabricate a landing page to fill the gap.
+    """
+    if not re.search(r"\bwi[\s-]*fi\b|\bwifi[67]?\b", question, re.I):
+        return []
+    hosts = {urlsplit(ref.get("url", "")).hostname or "" for ref in discovered}
+    missing = []
+    for name, pattern, domain in WIFI_NAMED_OFFICIAL_SITES:
+        if not re.search(pattern, question, re.I):
+            continue
+        if any(host == domain or host.endswith("." + domain) for host in hosts):
+            continue
+        missing.append({
+            "provider": "Requested official organization",
+            "title": name, "url": "", "snippet": "", "published": "",
+            "read_status": "source_not_found",
+        })
+    return missing
+
+
 def identity_official_docs(question: str) -> list[dict]:
     words = set(search_query_terms(question))
     if not words.intersection({"passkeys", "passkey", "fido2", "totp",
@@ -705,13 +737,20 @@ async def enrich_with_read_excerpts(
     loaded = await asyncio.gather(*(load(x) for x in approved_candidates))
     validated = [item for item in loaded if item]
     read_urls = {item["url"] for item in validated}
-    # A failed curated attempt is neither a read excerpt nor search metadata.
-    # Keep this distinction visible instead of silently omitting a named host.
-    fallback_urls = {ref["url"] for ref in fallback_refs}
-    unavailable = [{**ref, "read_status": "page_unavailable"}
-                   for ref in approved_candidates
-                   if ref["url"] in fallback_urls and ref["url"] not in read_urls]
-    remaining = [{**s, "read_status": "search_metadata_only"} for s in sources
-                 if s.get("url") not in read_urls]
-    # Only actually extracted page content may be labeled verified.
-    return (validated + unavailable + remaining)[:8]
+    # Provenance: attempted but no valid excerpt is NOT "metadata only".
+    # Keep strict curated-only routines' existing failure behavior unchanged;
+    # classify all selected general reader and WCAG fallback attempts.
+    attempted_urls = general_candidate_urls | {ref["url"] for ref in fallback_refs}
+    failed = [{**ref, "read_status": "page_unavailable"}
+              for ref in approved_candidates
+              if ref["url"] in attempted_urls and ref["url"] not in read_urls]
+    # Search metadata describes URLs which were discovered but NOT read.
+    remaining = [{**ref, "read_status": "search_metadata_only"}
+                 for ref in sources
+                 if ref.get("url") not in read_urls
+                 and ref.get("url") not in attempted_urls]
+    # For explicitly named institutions with NO discovered official URL, do
+    # not conflate absence from the index with a failed HTTP request.
+    missing = missing_named_official_sites(question, sources + fallback_refs)
+    # Reserve room for named missing institutions; never label them verified.
+    return (validated + missing + failed + remaining)[:8]
