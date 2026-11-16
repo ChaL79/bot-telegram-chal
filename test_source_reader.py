@@ -842,6 +842,19 @@ No content on data practices.
         self.assertEqual(result[0]["read_status"],"verified_page_excerpt")
         self.assertIn("NVMe",result[0]["excerpt"])
 
+    def test_ssd_secondary_reference_is_labeled_and_scoped(self):
+        from source_reader import ssd_support_reference
+        q = ("Bandingkan SSD NVMe PCIe dengan SSD SATA berdasarkan dokumentasi "
+             "rasmi Kingston Crucial dan Samsung")
+        refs = ssd_support_reference(q, [])
+        self.assertEqual(len(refs), 1)
+        self.assertEqual(refs[0]["url"], "https://www.ibm.com/think/topics/nvme")
+        self.assertIn("secondary", refs[0]["provider"])
+        self.assertNotIn("verified_page_excerpt", refs[0])
+        self.assertEqual(ssd_support_reference("What is NVMe?", []), [])
+        self.assertEqual(ssd_support_reference("SSD Kingston SATA", []), [])
+        self.assertEqual(ssd_support_reference(q, refs), [])
+
     def test_body_fallback_strictly_caps_untrusted_document_text(self):
         from source_reader import BoundedBodyText
         parser = BoundedBodyText()
