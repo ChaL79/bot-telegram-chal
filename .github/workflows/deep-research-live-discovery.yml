@@ -46,6 +46,15 @@ jobs:
                       print("RAW_RELEVANCE", source_relevance(entry, terms),
                             "TITLE", entry["title"][:95], "HOST", httpx.URL(entry["url"]).host,
                             "URL", entry["url"][:170], flush=True)
+              async with httpx.AsyncClient(timeout=10.0) as cli:
+                  for q in ('"Wi-Fi 7"', 'wifi 7 intel', 'site:intel.com wifi 7', 'site:spectrum.com wifi 7', 'wifi7 wifi6'):
+                      resp = await cli.get("https://www.bing.com/search",
+                                           params={"q": q, "format": "rss", "mkt": "en-US"})
+                      hits = parse_rss(resp.content, "variant", 10) if resp.status_code == 200 else []
+                      print("QUERY_VARIANT", repr(q), "STATUS", resp.status_code,
+                            "HITS", len(hits),
+                            "RELEVANT", sum(1 for item in hits if source_relevance(item, terms) > 0),
+                            "FIRST", hits[0]["title"][:75] if hits else "", flush=True)
               from public_article_reader import read_public_html
               from source_reader import MainText, select_relevant_excerpt
               targets = {
