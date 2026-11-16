@@ -91,7 +91,7 @@ class SourceReaderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sources[0]["url"], OFFICIAL_SEMAPHORE)
         self.assertEqual(sources[1]["read_status"], "search_metadata_only")
         self.assertIn("FETCHED PAGE EXCERPT", evidence_text(sources))
-        self.assertIn("[Metadata sahaja]", references_text(sources))
+        self.assertIn("[Metadata sahaja; belum dibaca]", references_text(sources))
         self.assertLessEqual(len(requests), 3)
 
     def test_explicit_aiolimiter_always_selects_its_docs(self):
