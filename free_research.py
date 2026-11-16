@@ -739,7 +739,7 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
                 # Explicit documentation comparisons must not be supported by
                 # storefront listings, even when the title mentions NVMe/SATA.
                 if (len(named_product_orgs) >= 2
-                        and re.search(r"\\b(?:rasmi|dokumentasi|documentation|official)\\b",
+                        and re.search(r"\b(?:rasmi|dokumentasi|documentation|official)\b",
                                       query_text, re.I)
                         and is_marketplace_listing(item["url"])):
                     continue
