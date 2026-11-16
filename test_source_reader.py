@@ -873,6 +873,28 @@ No content on data practices.
         self.assertEqual(requested_fatigue_official_refs("Fatigue in offshore", []), [])
         self.assertEqual(requested_fatigue_official_refs("Python asyncio rate limiting CDC HSE", []), [])
 
+    async def test_wifi7_comparison_recovery_keeps_quotes_source_bound(self):
+        from unittest.mock import patch
+        from source_reader import wifi7_comparison_recovery
+        q = ("Bandingkan Wi-Fi 7 dengan Wi-Fi 6: kelajuan, latency, MLO dan 6 GHz.")
+        self.assertEqual(len(wifi7_comparison_recovery(q, [])), 3)
+        self.assertEqual(wifi7_comparison_recovery("Wi-Fi 6 sahaja", []), [])
+        seen = []
+        async def mock_fetch(url, *, client=None):
+            seen.append(url)
+            if "intel.com" in url:
+                return ("<html><main><p>Intel Wi-Fi 7 supports faster wireless "
+                        "performance and multi-link operation compared with Wi-Fi 6.</p></main></html>")
+            return ("<html><main><p>Wi-Fi 7 improves network speed and latency "
+                    "compared to Wi-Fi 6 using multi-link operation technology.</p></main></html>")
+        with patch.dict("os.environ", {"ENABLE_GENERAL_PUBLIC_READER": "1"}):
+            with patch("source_reader.read_public_html", side_effect=mock_fetch):
+                evidence = await enrich_with_read_excerpts(q, [])
+        self.assertEqual(len(seen), 3)
+        self.assertEqual(len(evidence), 3)
+        self.assertTrue(all(r["read_status"] == "verified_page_excerpt" for r in evidence))
+        self.assertEqual(len({r["url"].split("/")[2] for r in evidence}), 3)
+
     async def test_fatigue_failed_page_not_marked_as_verified(self):
         from unittest.mock import patch
         q = "Pengurusan keletihan kerja syif tidur CDC NIOSH HSE shift work fatigue"
