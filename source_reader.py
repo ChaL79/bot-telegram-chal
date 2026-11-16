@@ -377,13 +377,13 @@ class BoundedBodyText(HTMLParser):
         if tag in self.SKIP:
             self.skipped.append(tag)
         if not self.skipped and tag in self.BREAKS:
-            self._append("\\n")
+            self._append("\n")
 
     def handle_endtag(self, tag):
         if self.in_body and tag in self.SKIP and self.skipped and self.skipped[-1] == tag:
             self.skipped.pop()
         if self.in_body and not self.skipped and tag in self.BREAKS:
-            self._append("\\n")
+            self._append("\n")
         if tag == "body":
             self.body_depth = max(0, self.body_depth - 1)
             if self.body_depth == 0:
@@ -401,7 +401,7 @@ class BoundedBodyText(HTMLParser):
             self._append(data)
 
     def content(self):
-        return "\\n".join(
+        return "\n".join(
             clean(row, 650) for row in "".join(self.fragments).splitlines()
             if clean(row, 650)
         )
