@@ -38,6 +38,11 @@ RESEARCH_PROMPT = (
     "Bezakan fakta terhad, inferens dan perkara yang belum disahkan. "
     "Jika sumber tidak cukup, nyatakan dengan jelas. "
     "Utamakan sumber rasmi apabila tersedia dan jangan mereka URL, masa atau nombor. "
+    "Bezakan empat status sumber dengan tepat: verified_page_excerpt ialah petikan yang "
+    "benar-benar dibaca; page_unavailable ialah cubaan baca yang tidak memperoleh petikan "
+    "sah; search_metadata_only ialah URL ditemui tetapi halaman belum dicuba; "
+    "source_not_found ialah organisasi diminta tetapi URL tidak ditemui, maka tiada "
+    "cubaan baca dibuat. Jangan menyamakan tidak ditemui dengan gagal diakses. "
     "Ringkaskan dapatan, bandingkan sumber yang ada, dan beri langkah semakan selanjutnya. "
     "Jangan buat transaksi, ubah kod, deploy atau menghantar mesej luaran."
 )
