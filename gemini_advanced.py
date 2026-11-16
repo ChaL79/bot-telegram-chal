@@ -206,11 +206,13 @@ def research_fallback(sources: list[dict], reason: str) -> str:
         title = str(source.get("title", ""))[:100]
         url = str(source.get("url", ""))
         if source.get("read_status") == "verified_page_excerpt" and source.get("excerpt"):
-            excerpt = " ".join(str(source["excerpt"]).split())[:550]
             label = "Petikan halaman diambil"
-            lines.append(f"[{i}] {title} [{label}]\n{url}\nPetikan: {excerpt}")
+            lines.append(f"[{i}] {title} [{label}]\n{url}")
         else:
             lines.append(f"[{i}] {title} [Metadata carian sahaja]\n{url}")
+    quotes = verified_source_quotes(sources[:5])
+    if quotes:
+        lines.append(quotes)
     lines.append("Sila semak sumber secara langsung; cuba /deepdive semula apabila Gemini tersedia.")
     return "\n\n".join(lines)[:7600]
 
