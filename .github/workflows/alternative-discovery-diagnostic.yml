@@ -122,6 +122,17 @@ jobs:
                   "samsung": "https://semiconductor.samsung.com/consumer-storage/support/faqs/internalssd-product-information/",
                   "samsung_ssd": "https://semiconductor.samsung.com/ssd/pc-ssd/pm9e1/",
               }
+              async with httpx.AsyncClient(timeout=9,follow_redirects=False) as probe_cli:
+                  for label,url in urls.items():
+                      try:
+                          response=await probe_cli.get(url,headers={"Accept":"text/html"})
+                          print("DIRECT_STATUS",label,"HTTP",response.status_code,
+                                "MIME",response.headers.get("content-type","")[:70],
+                                "BYTES",len(response.content),
+                                "LOCATION_HOST",urlsplit(response.headers.get("location","")).hostname,
+                                flush=True)
+                      except Exception as exc:
+                          print("DIRECT_STATUS",label,"ERROR",type(exc).__name__,flush=True)
               for label,url in urls.items():
                   html = await read_public_html(url)
                   parser=MainText()
