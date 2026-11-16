@@ -3,7 +3,7 @@ import httpx
 from unittest.mock import AsyncMock, patch
 
 from public_article_reader import (
-    safe_public_article_url, resolve_public_ip, read_public_html, PublicIPBackend,
+    safe_public_article_url, resolve_public_ip, read_public_html, PublicIPBackend, MAX_GENERAL_BYTES,
 )
 from source_reader import enrich_with_read_excerpts
 
@@ -106,7 +106,7 @@ class PublicReaderSecurityTests(unittest.IsolatedAsyncioTestCase):
             httpx.Response(200, headers={"content-type":"text/html",
                                          "content-length":"999999"}),
             httpx.Response(200, headers={"content-type":"text/html"},
-                           content=b"a"*350001),
+                           content=b"a"*(MAX_GENERAL_BYTES + 1)),
         ]:
             requests = []
             def mock(req):
@@ -115,6 +115,15 @@ class PublicReaderSecurityTests(unittest.IsolatedAsyncioTestCase):
             async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as cli:
                 self.assertEqual(await read_public_html(url, client=cli), "")
             self.assertEqual(requests, [url])
+
+    async def test_bounded_document_above_350kb_is_allowed(self):
+        url = "https://semiconductor.samsung.com/consumer-storage/support/faqs/internalssd-product-information/"
+        content = b"<html><main><p>Samsung NVMe SSD SATA compatibility documentation.</p></main>" + b" " * 430000 + b"</html>"
+        self.assertLessEqual(len(content), MAX_GENERAL_BYTES)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(
+            lambda req: httpx.Response(200, headers={"content-type": "text/html"}, content=content)
+        )) as cli:
+            self.assertEqual(await read_public_html(url, client=cli), content.decode())
 
     async def test_general_reader_disabled_by_default(self):
         from unittest.mock import patch
