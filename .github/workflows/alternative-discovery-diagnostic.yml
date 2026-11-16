@@ -138,13 +138,35 @@ jobs:
                                 flush=True)
                       except Exception as exc:
                           print("DIRECT_STATUS",label,"ERROR",type(exc).__name__,flush=True)
+              from html.parser import HTMLParser
+              class SafeBodyText(HTMLParser):
+                  blocked={"script","style","noscript","template","svg","nav","footer","header","aside"}
+                  def __init__(self):
+                      super().__init__(convert_charrefs=True)
+                      self.stack=[]; self.parts=[]; self.body=False
+                  def handle_starttag(self,tag,attrs):
+                      if tag=="body":self.body=True
+                      if tag in self.blocked:self.stack.append(tag)
+                      if tag in ("p","li","h1","h2","h3","div","section","br"):
+                          self.parts.append("\\n")
+                  def handle_endtag(self,tag):
+                      if tag=="body":self.body=False
+                      if tag in self.blocked and self.stack and self.stack[-1]==tag:self.stack.pop()
+                  def handle_data(self,data):
+                      if self.body and not self.stack:self.parts.append(data)
               for label,url in urls.items():
                   html = await read_public_html(url)
                   parser=MainText()
+                  fallback=SafeBodyText()
                   if html:
                       parser.feed(html)
+                      fallback.feed(html)
                   extracted=select_relevant_excerpt(parser.content(), question)
+                  alt_text=" ".join(fallback.parts)
+                  alt=select_relevant_excerpt(alt_text,question)
                   print("ACTUAL_ARTICLE",label,"HTML",len(html),"TEXT",len(parser.content()),
                         "EXCERPT",len(extracted),"PREVIEW",repr(extracted[:130]),flush=True)
+                  print("BODY_FALLBACK",label,"BODY_CHARS",len(alt_text),"EXCERPT",len(alt),
+                        "PREVIEW",repr(alt[:150]),flush=True)
           asyncio.run(main())
           PY
