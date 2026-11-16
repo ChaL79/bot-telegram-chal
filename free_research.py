@@ -485,8 +485,11 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
             return items
 
         async def get_product_site(org: str) -> list[dict]:
-            host = PRODUCT_OFFICIAL_DOMAINS[org][0]
-            q = "site:" + host + " " + " ".join(subject_terms[:3])
+            # Bing RSS can ignore site: and return unrelated retail results.
+            # Use subject-led named-maker search, then enforce exact host matching.
+            q_terms = [term for term in ("nvme", "sata", "ssd", "pcie")
+                       if term in subject_terms]
+            q = " ".join((q_terms[:3] or subject_terms[:3]) + [org])
             resp = await session.get("https://www.bing.com/search",
                                      params={"q": q, "format": "rss", "mkt": "en-US"},
                                      timeout=7.0)
