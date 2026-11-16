@@ -449,6 +449,26 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
             log.info("Bing RSS parsed %d metadata results", len(items))
             return items
 
+        async def get_bing_short():
+            # A verbose multi-condition search may return generic/noisy results.
+            # A second, independent concise query makes discovery less brittle
+            # without using a paid API or broadening the reader's URL policy.
+            key_terms = [term for term in terms if len(term) >= 5 and term not in {"wifi"}]
+            short_query = " ".join(key_terms[:2])[:80]
+            if len(terms) <= 5 or not short_query or short_query == query:
+                return []
+            resp = await session.get(
+                "https://www.bing.com/search",
+                params={"q": short_query, "format": "rss", "mkt": "en-US"},
+                timeout=7.0,
+            )
+            if resp.status_code != 200:
+                log.info("Bing concise RSS response HTTP %s", resp.status_code)
+                return []
+            items = parse_rss(resp.content, "Bing concise web-search RSS", 10)
+            log.info("Bing concise RSS parsed %d metadata results", len(items))
+            return items
+
         # Independent official sources are discovered through the same free
         # Bing RSS endpoint, without constructing or guessing document URLs.
         # One short site-scoped lookup per organization, max three in total.
@@ -577,7 +597,7 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
             log.info("Hacker News API parsed %d metadata results", len(items))
             return items
 
-        providers = [get_bing(), get_wikipedia(), get_news()]
+        providers = [get_bing(), get_bing_short(), get_wikipedia(), get_news()]
         providers.extend(get_official_site(org) for org in organizations)
         providers.extend(get_accessibility_site(org) for org in accessibility_orgs)
         if tech:
