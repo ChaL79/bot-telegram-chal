@@ -115,5 +115,20 @@ jobs:
               await inspect_rss()
               await inspect_official_indices()
               await inspect_sitemap_articles()
+              from public_article_reader import read_public_html
+              from source_reader import MainText, select_relevant_excerpt
+              urls = {
+                  "kingston": "https://www.kingston.com/en/ssd/what-is-nvme-ssd-technology",
+                  "samsung": "https://semiconductor.samsung.com/consumer-storage/support/faqs/internalssd-product-information/",
+                  "samsung_ssd": "https://semiconductor.samsung.com/ssd/pc-ssd/pm9e1/",
+              }
+              for label,url in urls.items():
+                  html = await read_public_html(url)
+                  parser=MainText()
+                  if html:
+                      parser.feed(html)
+                  extracted=select_relevant_excerpt(parser.content(), question)
+                  print("ACTUAL_ARTICLE",label,"HTML",len(html),"TEXT",len(parser.content()),
+                        "EXCERPT",len(extracted),"PREVIEW",repr(extracted[:130]),flush=True)
           asyncio.run(main())
           PY
