@@ -91,6 +91,63 @@ class MediaTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("gemini-3.5-flash-lite:generateContent", str(captured[0].url))
         self.assertEqual(captured[0].headers.get("x-goog-api-key"), "gem-key")
 
+    async def test_pdf_503_retries_once_then_succeeds(self):
+        from unittest.mock import patch
+        requests = []
+        def responder(req):
+            requests.append(req)
+            if len(requests) == 1:
+                return httpx.Response(503)
+            return httpx.Response(
+                200, json={"candidates":[{"content":{"parts":[{"text":"Recovered PDF."}]}}]})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(responder)) as cli:
+            with patch("media_tools.asyncio.sleep", new_callable=__import__("unittest.mock", fromlist=["AsyncMock"]).AsyncMock) as pause:
+                reply = await analyze_pdf(b"%PDF-1.7 test", "summary",
+                    "gem-key", "gemini-3.5-flash-lite", client=cli)
+        self.assertEqual(reply, "Recovered PDF.")
+        self.assertEqual(len(requests), 2)
+        pause.assert_awaited_once()
+
+    async def test_pdf_persistent_503_triggers_local_fallback_flag(self):
+        from unittest.mock import patch, AsyncMock
+        from media_tools import should_fallback_pdf
+        requests = []
+        def responder(req):
+            requests.append(req)
+            return httpx.Response(503)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(responder)) as cli:
+            with patch("media_tools.asyncio.sleep", new_callable=AsyncMock):
+                reply = await analyze_pdf(b"%PDF-1.7 test", "summary",
+                    "gem-key", "gemini-3.5-flash-lite", client=cli)
+        self.assertEqual(len(requests), 2)
+        self.assertTrue(should_fallback_pdf(reply))
+        self.assertFalse(should_fallback_pdf("PDF belum berjaya dianalisis (Gemini HTTP 429)."))
+
+    async def test_pdf_429_never_retries(self):
+        requests = []
+        def responder(req):
+            requests.append(req)
+            return httpx.Response(429)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(responder)) as cli:
+            reply = await analyze_pdf(b"%PDF-1.7 test", "summary",
+                                      "gem-key", "gemini-3.5-flash-lite", client=cli)
+        self.assertEqual(len(requests), 1)
+        self.assertIn("429", reply)
+
+    def test_text_only_pdf_fallback_is_bounded(self):
+        from unittest.mock import patch
+        from media_tools import extract_pdf_text
+        class Page:
+            def extract_text(self):
+                return "The safe report says hello."
+        class Reader:
+            is_encrypted = False
+            pages = [Page()] * 400
+        with patch("pypdf.PdfReader", return_value=Reader()):
+            result = extract_pdf_text(b"%PDF-1.7 test")
+        self.assertEqual(result.count("The safe report says hello."), 8)
+        self.assertEqual(extract_pdf_text(b"not a pdf"), "")
+
     async def test_rejects_bad_or_oversize_media_before_any_network(self):
         self.assertIn("tidak disokong",
                       await analyze_image(b"fake", "?", "key"))
