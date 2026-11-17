@@ -150,7 +150,7 @@ class FreeResearchTests(unittest.IsolatedAsyncioTestCase):
         q = ("/deepdive Bandingkan internet satelit LEO vs GEO untuk kapal offshore: "
              "latency, kelajuan, liputan, cuaca, dan handover.")
         terms = search_query_terms(q)
-        self.assertEqual(terms[:3], ["leo", "geo", "satellite"])
+        self.assertEqual(terms[:3], ["satellite", "leo", "geo"])
         self.assertIn("offshore", terms)
         self.assertIn("speed", terms)
         self.assertIn("coverage", terms)
