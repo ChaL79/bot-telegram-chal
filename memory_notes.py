@@ -12,8 +12,8 @@ MAX_NOTE_CHARS = 180
 MAX_DISPLAY_CHARS = 3200
 
 FORBIDDEN = re.compile(
-    r"(?i)(password|kata\\s*laluan|passphrase|api[ _-]?key|access[ _-]?token|"
-    r"secret|otp|private[ _-]?key|cvv|pin\\s*(?:bank|kad|card)|"
+    r"(?i)(password|kata\s*laluan|passphrase|api[ _-]?key|access[ _-]?token|"
+    r"secret|otp|private[ _-]?key|cvv|pin\s*(?:bank|kad|card)|"
     r"seed[ _-]?phrase|recovery[ _-]?phrase)"
 )
 
@@ -22,7 +22,7 @@ def validate_new_note(note: str) -> str:
     note = " ".join(note.strip().split())
     if not note or len(note) > MAX_NOTE_CHARS:
         raise ValueError("Nota mesti 1 hingga 180 aksara.")
-    if "\\n" in note or FORBIDDEN.search(note):
+    if "\n" in note or FORBIDDEN.search(note):
         raise ValueError("Jangan simpan kata laluan, token API atau maklumat rahsia.")
     return note
 
@@ -33,19 +33,19 @@ def serialize_notes(notes: list[str]) -> str:
         for v in notes
     ):
         raise ValueError("Memori melebihi had.")
-    body = "\\n".join(f"{i}. {v}" for i, v in enumerate(notes, 1))
-    text = MARKER + "\\n" + body
+    body = "\n".join(f"{i}. {v}" for i, v in enumerate(notes, 1))
+    text = MARKER + "\n" + body
     if len(text) > MAX_DISPLAY_CHARS:
         raise ValueError("Memori terlalu panjang.")
     return text
 
 
 def parse_notes(content: str | None) -> list[str] | None:
-    if not isinstance(content, str) or not content.startswith(MARKER + "\\n"):
+    if not isinstance(content, str) or not content.startswith(MARKER + "\n"):
         return None
     if len(content) > MAX_DISPLAY_CHARS:
         return None
-    rest = content.split("\\n")[1:]
+    rest = content.split("\n")[1:]
     if not rest or rest == [""]:
         return []
     if len(rest) > MAX_NOTES:
