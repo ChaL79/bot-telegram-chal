@@ -307,9 +307,19 @@ async def resetmemory_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         await msg.reply_text("Memori sementara Gemini telah dikosongkan.")
 
 
+def is_private_owner_update(update: Update) -> bool:
+    """Fail closed before any paid/free API call or Telegram media download."""
+    user, chat = update.effective_user, update.effective_chat
+    if not user or not chat:
+        return False
+    return is_authorized_owner(
+        user.id, os.environ.get("GEMINI_OWNER_ID", ""), chat.type
+    )
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
-    if not msg or not msg.text:
+    if not msg or not msg.text or not is_private_owner_update(update):
         return
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     messages = [
@@ -328,7 +338,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
-    if not msg or not msg.voice:
+    if not msg or not msg.voice or not is_private_owner_update(update):
         return
 
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
