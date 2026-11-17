@@ -6,7 +6,7 @@ import httpx
 from free_research import (
     allowed_source_url, parse_rss, parse_wikipedia, public_source_search,
     evidence_text, references_text, search_query_terms, source_relevance,
-    parse_stackexchange, parse_hackernews,
+    parse_stackexchange, parse_hackernews, parse_bing_news_rss,
 )
 
 
@@ -195,6 +195,64 @@ class FreeResearchTests(unittest.IsolatedAsyncioTestCase):
         hosts = {urlsplit(r["url"]).hostname for r in results}
         self.assertEqual(hosts, {"orbitalpha.org", "orbitbeta.net"})
         self.assertNotIn("www.ibm.com", hosts)
+
+    def test_bing_news_publisher_link_extraction_is_strict_and_no_fetch(self):
+        from urllib.parse import quote
+        from xml.sax.saxutils import escape
+        good = "https://publisher-one.org/articles/satellite-leo-geo"
+        safe = "http://www.bing.com/news/apiclick.aspx?ref=FexRss&url=" + quote(good, safe="")
+        unsafe = [
+            "http://www.bing.com/news/apiclick.aspx?url=" + quote("http://127.0.0.1/admin", safe=""),
+            "http://www.bing.com/news/apiclick.aspx?url=" + quote("https://localhost/a", safe=""),
+            "http://evil.com/news/apiclick.aspx?url=" + quote(good, safe=""),
+            "http://www.bing.com/redirect?url=" + quote(good, safe=""),
+            "http://www.bing.com/news/apiclick.aspx?url=" + quote(good + "?tracking=1", safe=""),
+            "http://www.bing.com/news/apiclick.aspx?url=" + quote(good, safe="") +
+            "&url=" + quote("https://evil.org/article", safe=""),
+        ]
+        items = [(safe, "LEO GEO satellite maritime broadband")] + [
+            (u, "Untrusted") for u in unsafe]
+        xml = ("<rss><channel>" + "".join(
+            "<item><title>" + title + "</title><link>" + escape(url) +
+            "</link><description>LEO GEO satellite internet</description></item>"
+            for url, title in items) + "</channel></rss>").encode()
+        results = parse_bing_news_rss(xml)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["url"], good)
+        self.assertIn("not yet verified", results[0]["provider"])
+        self.assertEqual(parse_bing_news_rss(b"<!DOCTYPE rss><rss/>"), [])
+
+    async def test_news_fallback_recovers_independent_satellite_publishers(self):
+        from urllib.parse import quote
+        from xml.sax.saxutils import escape
+        articles = [
+            ("LEO GEO satellite for maritime vessels",
+             "https://publisher-alpha.org/insight/leo-geo-satellite"),
+            ("LEO satellite connectivity for offshore ships",
+             "https://publisher-beta.net/research/leo-satellite-maritime"),
+        ]
+        rss = ("<rss><channel>" + "".join(
+            "<item><title>" + title + "</title><link>" +
+            escape("http://www.bing.com/news/apiclick.aspx?url=" +
+                   quote(url, safe="")) +
+            "</link><description>Satellite LEO GEO offshore coverage handover</description></item>"
+            for title, url in articles) + "</channel></rss>").encode()
+        calls = []
+        def mock(req):
+            calls.append((req.url.host, req.url.path))
+            if req.url.host == "www.bing.com" and req.url.path == "/news/search":
+                return httpx.Response(200, content=rss)
+            if req.url.host == "www.bing.com":
+                return httpx.Response(200, content=b"<rss><channel/></rss>")
+            if req.url.host == "en.wikipedia.org":
+                return httpx.Response(200, json={"query":{"search":[]}})
+            return httpx.Response(503)
+        question = "Bandingkan internet satelit LEO GEO kapal offshore latency cuaca handover"
+        async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as client:
+            sources = await public_source_search(question, client=client)
+        self.assertEqual({urlsplit(x["url"]).hostname for x in sources},
+                         {"publisher-alpha.org", "publisher-beta.net"})
+        self.assertEqual(sum(path == "/news/search" for host, path in calls), 1)
 
     def test_wifi_research_keeps_topic_not_malay_instructions(self):
         question = ("/deepdive Deep research: Bandingkan Wi-Fi 7 dengan Wi-Fi 6 berdasarkan "
