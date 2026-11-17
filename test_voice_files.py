@@ -100,6 +100,8 @@ class VoiceHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
             "read_user_notes": AsyncMock(return_value=[]),
             "notes_as_instruction": lambda notes: "",
             "send_spoken_reply": AsyncMock(return_value=True),
+            "reply_with_context": simulated_ask_ai,
+            "valid_ai_response": lambda response, error: response != error,
             "cleanup_voice_tempfiles": cleanup_voice_tempfiles,
             "is_private_owner_update": lambda update: True,
             "log": logging.getLogger("voice_handler_test"),
