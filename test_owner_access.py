@@ -36,6 +36,8 @@ def handlers_under_test():
         "read_user_notes": AsyncMock(return_value=[]),
         "notes_as_instruction": lambda notes: "",
         "send_spoken_reply": AsyncMock(return_value=True),
+        "reply_with_context": AsyncMock(return_value="Authorized answer"),
+        "valid_ai_response": lambda response, error: response != error,
     }
     exec(compile(ast.Module(body=selected, type_ignores=[]),
                  filename="bot.py", mode="exec"), namespace)
@@ -88,6 +90,7 @@ class OwnerOnlyAccessTests(unittest.IsolatedAsyncioTestCase):
                     ctx.bot.send_chat_action.assert_not_awaited()
                     ctx.bot.get_file.assert_not_awaited()
                     ns["ask_ai"].assert_not_awaited()
+                    ns["reply_with_context"].assert_not_awaited()
                     update.effective_message.reply_text.assert_not_awaited()
                     ns["ask_ai"].reset_mock()
 
@@ -126,7 +129,7 @@ class OwnerOnlyAccessTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(ns["is_private_owner_update"](update))
             await ns["handle_message"](update, ctx)
         ctx.bot.send_chat_action.assert_awaited_once()
-        ns["ask_ai"].assert_awaited_once()
+        ns["reply_with_context"].assert_awaited_once()
         update.effective_message.reply_text.assert_awaited_once_with("Authorized answer")
 
 
