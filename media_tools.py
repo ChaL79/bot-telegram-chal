@@ -4,6 +4,7 @@ No local persistence. Images go to the existing Groq multimodal model, PDFs
 to the existing Gemini model, and small text/Office documents are extracted
 locally for the normal Groq text route. User content is UNTRUSTED data.
 """
+import asyncio
 import base64
 import io
 import re
@@ -15,6 +16,8 @@ import httpx
 MAX_IMAGE_BYTES = 4_000_000
 MAX_DOCUMENT_BYTES = 3_000_000
 MAX_EXTRACT_CHARS = 14_000
+MAX_PDF_TEXT_PAGES = 8
+PDF_RETRY_STATUS = frozenset({500, 502, 503, 504})
 ALLOWED_DOCUMENT_EXTENSIONS = {".pdf", ".txt", ".md", ".csv", ".docx", ".xlsx", ".jpg", ".jpeg", ".png", ".webp"}
 GROQ_VISION_MODEL = "qwen/qwen3.8-27b"
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
@@ -160,6 +163,43 @@ async def analyze_image(data: bytes, question: str, key: str, *, client=None) ->
         return await call(session)
 
 
+def extract_pdf_text(data: bytes) -> str:
+    """Read at most eight PDF pages as TEXT ONLY with zero external requests.
+
+    This is for temporary Gemini failures. Scanned pages, images and charts
+    cannot be recovered via this fallback; no content is written to disk.
+    """
+    if not data.startswith(b"%PDF-") or not 0 < len(data) <= MAX_DOCUMENT_BYTES:
+        return ""
+    try:
+        from pypdf import PdfReader
+        reader = PdfReader(io.BytesIO(data), strict=False)
+        if reader.is_encrypted:
+            return ""
+        output = []
+        chars_left = MAX_EXTRACT_CHARS
+        for index in range(min(len(reader.pages), MAX_PDF_TEXT_PAGES)):
+            text = reader.pages[index].extract_text() or ""
+            if text.strip():
+                chunk = text[:chars_left]
+                output.append(chunk)
+                chars_left -= len(chunk)
+            if chars_left <= 0:
+                break
+        return "\n".join(output).strip()[:MAX_EXTRACT_CHARS]
+    except Exception:
+        # Malformed/encrypted/unsupported PDF; do not expose private content.
+        return ""
+
+
+def should_fallback_pdf(result: str) -> bool:
+    """Permit local text fallback only for transient server errors, not quota."""
+    return any(
+        result == f"PDF belum berjaya dianalisis (Gemini HTTP {code})."
+        for code in PDF_RETRY_STATUS
+    )
+
+
 async def analyze_pdf(data: bytes, question: str, key: str, model: str, *, client=None) -> str:
     """Inline PDF to preconfigured Gemini Free Tier; never uploads to a file store."""
     if not data.startswith(b"%PDF-") or len(data) > MAX_DOCUMENT_BYTES:
@@ -181,21 +221,31 @@ async def analyze_pdf(data: bytes, question: str, key: str, model: str, *, clien
         "generationConfig": {"temperature": 0.2, "maxOutputTokens": 1400},
     }
     async def call(session):
-        try:
-            r = await session.post(
-                GEMINI_API_URL + "/" + model + ":generateContent",
-                headers={"x-goog-api-key": key, "Content-Type": "application/json"},
-                json=payload, timeout=httpx.Timeout(45.0, connect=5.0))
+        url = GEMINI_API_URL + "/" + model + ":generateContent"
+        for attempt in range(2):
+            try:
+                r = await session.post(
+                    url,
+                    headers={"x-goog-api-key": key, "Content-Type": "application/json"},
+                    json=payload, timeout=httpx.Timeout(18.0, connect=5.0))
+            except (httpx.HTTPError, ValueError):
+                return "Analisis PDF gagal atau tamat masa. Cuba fail lebih kecil."
+            if r.status_code in PDF_RETRY_STATUS and attempt == 0:
+                # One bounded retry, with backoff. Never retry quota (429).
+                await asyncio.sleep(0.8)
+                continue
             if r.status_code != 200:
                 return "PDF belum berjaya dianalisis (Gemini HTTP " + str(r.status_code) + ")."
-            body = r.json()
-            candidates = body.get("candidates") or []
-            parts = candidates[0].get("content", {}).get("parts", []) if candidates else []
-            answer = "\n".join(p.get("text", "") for p in parts
-                               if isinstance(p, dict) and not p.get("thought", False))
-            return answer[:3900] if answer.strip() else "Gemini tidak dapat membaca PDF ini."
-        except (httpx.HTTPError, ValueError, KeyError, IndexError):
-            return "Analisis PDF gagal atau tamat masa. Cuba fail lebih kecil."
+            try:
+                body = r.json()
+                candidates = body.get("candidates") or []
+                parts = candidates[0].get("content", {}).get("parts", []) if candidates else []
+                answer = "\n".join(p.get("text", "") for p in parts
+                                   if isinstance(p, dict) and not p.get("thought", False))
+                return answer[:3900] if answer.strip() else "Gemini tidak dapat membaca PDF ini."
+            except (ValueError, KeyError, IndexError):
+                return "Gemini mengembalikan respons PDF yang tidak sah."
+        return "Analisis PDF tidak tersedia sekarang."
     if client is not None:
         return await call(client)
     async with httpx.AsyncClient() as session:
