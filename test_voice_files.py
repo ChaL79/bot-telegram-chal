@@ -98,6 +98,7 @@ class VoiceHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
             "SYSTEM_PROMPT": "test", "FINAL_ERROR_MESSAGE": "fallback",
             "transcribe_voice": simulated_transcribe, "ask_ai": simulated_ask_ai,
             "cleanup_voice_tempfiles": cleanup_voice_tempfiles,
+            "is_private_owner_update": lambda update: True,
             "log": logging.getLogger("voice_handler_test"),
         }
         exec(compile(ast.Module(body=[fn], type_ignores=[]),
