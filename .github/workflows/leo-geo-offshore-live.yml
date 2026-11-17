@@ -4,6 +4,7 @@ on:
     paths:
       - 'free_research.py'
       - 'source_reader.py'
+      - 'gemini_advanced.py'
       - 'test_free_research.py'
       - 'test_source_reader.py'
       - '.github/workflows/leo-geo-offshore-live.yml'
@@ -21,301 +22,70 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install -r requirements.txt
-      - name: Diagnose no-key public search before acceptance (read-only)
-        run: |
-          python - <<'PY'
-          import asyncio
-          import httpx
-          from free_research import parse_rss, search_query_terms, source_relevance
-          from urllib.parse import urlsplit
-          samples = [
-              ("topic_orbits", "LEO GEO satellite maritime connectivity"),
-              ("orbit_full_names", "low earth orbit geostationary satellite maritime"),
-              ("ship_coverage", "satellite broadband offshore vessels GEO LEO"),
-              ("comparison", "LEO vs GEO satellite latency coverage handover"),
-              ("anchor_satellite", "satellite communication maritime offshore"),
-              ("anchor_network", "satellite internet geostationary maritime"),
-              ("anchor_satellite_orbits", "satellite orbit geostationary low earth"),
-              ("anchor_satellite_leo_geo", "satellite LEO GEO maritime"),
-              ("anchor_vsat", "VSAT maritime offshore satellite connectivity"),
-              ("anchor_geo", "geostationary satellite maritime communications"),
-              ("anchor_leo", "satellite constellation maritime broadband"),
-              ("anchor_marine", "maritime satellite internet latency"),
-              ("anchor_geo_leo_expanded", "satellite network orbit altitude latency maritime"),
-              ("anchor_multiorbit", "satellite multi orbit maritime connectivity"),
-          ]
-          async def probe(label, q):
-              try:
-                  async with httpx.AsyncClient(timeout=8, follow_redirects=False) as c:
-                      r = await c.get("https://www.bing.com/search",
-                                      params={"q": q, "format":"rss","mkt":"en-US"})
-                  hits = parse_rss(r.content,"diagnostic",10) if r.status_code==200 else []
-                  print("PROBE_RSS",label,"HTTP",r.status_code,"BYTES",len(r.content),
-                        "HITS",len(hits),flush=True)
-                  for h in hits[:5]:
-                      print("PROBE_RESULT",label,urlsplit(h["url"]).hostname,
-                            h.get("title","")[:100],flush=True)
-              except Exception as exc:
-                  print("PROBE_RSS",label,"ERROR",type(exc).__name__,flush=True)
-          async def alternative(label,url,params):
-              try:
-                  async with httpx.AsyncClient(timeout=8,follow_redirects=False) as c:
-                      r=await c.get(url,params=params,headers={"User-Agent":"Mozilla/5.0"})
-                  body=r.text[:150000]
-                  print("PROBE_ALT",label,"HTTP",r.status_code,"BYTES",len(r.content),
-                        "LEO",body.casefold().count("leo"),"GEO",body.casefold().count("geo"),
-                        "SATELLITE",body.casefold().count("satellite"),flush=True)
-              except Exception as exc:
-                  print("PROBE_ALT",label,"ERROR",type(exc).__name__,flush=True)
-          async def main():
-              await asyncio.gather(
-                  *(probe(label,q) for label,q in samples),
-                  alternative("ddg_html","https://html.duckduckgo.com/html/",
-                              {"q":"LEO GEO satellite maritime connectivity"}),
-                  alternative("mojeek","https://www.mojeek.com/search",
-                              {"q":"LEO GEO satellite maritime connectivity"}),
-                  alternative("google_html","https://www.google.com/search",
-                              {"q":"LEO GEO satellite maritime connectivity"}),
-              )
-          asyncio.run(main())
-          PY
-      - name: Inspect Google HTML outbound article links without fetching them
-        run: |
-          python - <<'PY'
-          import asyncio, html, re
-          from html.parser import HTMLParser
-          from urllib.parse import urljoin, urlsplit, parse_qs, unquote
-          import httpx
-          from public_article_reader import safe_public_article_url
-          class Links(HTMLParser):
-              def __init__(self):
-                  super().__init__()
-                  self.links=[]
-              def handle_starttag(self, tag, attrs):
-                  if tag=="a":
-                      href=dict(attrs).get("href","")
-                      if href:
-                          self.links.append(html.unescape(href))
-          async def main():
-              queries=["LEO GEO satellite maritime connectivity",
-                       "geostationary low earth orbit offshore satellite internet",
-                       "satellite marine handover rain fade latency"]
-              async with httpx.AsyncClient(timeout=9,follow_redirects=False) as cli:
-                  for q in queries:
-                      try:
-                          resp=await cli.get("https://www.google.com/search",
-                              params={"q":q,"num":"15"},headers={"User-Agent":"Mozilla/5.0"})
-                      except httpx.HTTPError as exc:
-                          print("GOOGLE_DIAG_ERROR",type(exc).__name__,flush=True)
-                          continue
-                      parser=Links()
-                      parser.feed(resp.text[:300000])
-                      out=[]
-                      for raw in parser.links:
-                          u=raw
-                          if raw.startswith("/url?"):
-                              u=parse_qs(urlsplit(raw).query).get("q",[""])[0]
-                          elif raw.startswith("/"):
-                              continue
-                          host=urlsplit(u).hostname or ""
-                          if host.endswith("google.com") or host.endswith("googleusercontent.com"):
-                              continue
-                          if safe_public_article_url(u) and u not in out:
-                              out.append(u)
-                      print("GOOGLE_LINKS",resp.status_code,"ANCHORS",len(parser.links),
-                            "SAFE_ARTICLE_LINKS",len(out),flush=True)
-                      for url in out[:12]:
-                          print("GOOGLE_LINK",urlsplit(url).hostname,
-                                urlsplit(url).path[:130],flush=True)
-          asyncio.run(main())
-          PY
-      - name: Probe independent free documented discovery endpoints
-        run: |
-          python - <<'PY'
-          import asyncio, httpx
-          from urllib.parse import urlsplit
-          from free_research import parse_rss
-          probes = [
-            ("bing_news", "https://www.bing.com/news/search", {"q":"satellite LEO GEO maritime offshore connectivity","format":"rss"}),
-            ("google_news", "https://news.google.com/rss/search", {"q":"LEO GEO satellite maritime broadband","hl":"en-US","gl":"US","ceid":"US:en"}),
-            ("gdelt_doc", "https://api.gdeltproject.org/api/v2/doc/doc", {"query":"satellite maritime","mode":"ArtList","format":"json","maxrecords":"10"}),
-            ("wikipedia_search", "https://en.wikipedia.org/w/api.php", {"action":"query","list":"search","srsearch":"satellite internet low earth orbit geostationary","srlimit":"8","format":"json"}),
-            ("wikipedia_extlinks", "https://en.wikipedia.org/w/api.php", {"action":"query","generator":"search","gsrsearch":"satellite internet constellation","gsrlimit":"3","prop":"extlinks","ellimit":"30","format":"json"}),
-            ("crossref", "https://api.crossref.org/works", {"query":"LEO GEO satellite maritime communications","rows":"5"}),
-          ]
-          async def run(tag,url,params):
-            try:
-              async with httpx.AsyncClient(timeout=10,follow_redirects=False,headers={"User-Agent":"ChaL79Bot/1.4 public research probe"}) as c:
-                r=await c.get(url,params=params)
-              ct=r.headers.get("content-type","")
-              print("FREE_PROBE",tag,r.status_code,ct[:60],len(r.content),flush=True)
-              if "rss" in ct or "xml" in ct:
-                found=parse_rss(r.content,tag,10)
-                for v in found[:6]:print("FREE_RSS",tag,urlsplit(v["url"]).hostname,v["title"][:85],flush=True)
-              elif "json" in ct:
-                data=r.json()
-                if tag=="gdelt_doc":
-                  for v in data.get("articles",[])[:8]:print("FREE_GDELT",urlsplit(v.get("url","")).hostname,v.get("title","")[:85],flush=True)
-                elif tag=="wikipedia_search":
-                  for v in data.get("query",{}).get("search",[])[:8]:print("FREE_WIKI",v.get("title",""),flush=True)
-                elif tag=="wikipedia_extlinks":
-                  for v in data.get("query",{}).get("pages",{}).values():
-                    urls=[x.get("*","") for x in v.get("extlinks",[])]
-                    print("FREE_WIKI_EXT",v.get("title",""),len(urls),[urlsplit(u).hostname for u in urls[:12]],flush=True)
-              else:
-                print("FREE_BODY",tag,repr(r.text[:120]),flush=True)
-            except Exception as e:
-              print("FREE_ERROR",tag,type(e).__name__,str(e)[:100],flush=True)
-          async def main():await asyncio.gather(*(run(*p) for p in probes))
-          asyncio.run(main())
-          PY
-      - name: Probe discovered encyclopedia citations with the safe HTML reader
-        run: |
-          python - <<'PY'
-          import asyncio, httpx
-          from urllib.parse import urlsplit
-          from public_article_reader import safe_public_article_url, read_public_html
-          from source_reader import MainText, BoundedBodyText, select_relevant_excerpt
-          topics=("Satellite Internet access","Low Earth orbit","Geostationary orbit",
-                  "Communications satellite","Satellite internet constellation")
-          q="LEO GEO satellite maritime offshore latency weather handover broadband"
-          async def main():
-              async with httpx.AsyncClient(timeout=12) as client:
-                  r=await client.get("https://en.wikipedia.org/w/api.php",params={
-                      "action":"query","titles":"|".join(topics),"prop":"extlinks",
-                      "ellimit":"100","format":"json"})
-              print("CITE_API",r.status_code,flush=True)
-              if r.status_code != 200 or "json" not in r.headers.get("content-type",""):
-                  print("CITE_API_UNAVAILABLE",r.status_code,flush=True)
-                  return
-              entries=[]
-              for page in r.json().get("query",{}).get("pages",{}).values():
-                  for item in page.get("extlinks",[]):
-                      url=item.get("*") or item.get("url") or ""
-                      if safe_public_article_url(url) and url not in entries:
-                          entries.append(url)
-              print("CITE_DISCOVERED",len(entries),flush=True)
-              found=[]
-              for url in entries[:50]:
-                  html=await read_public_html(url)
-                  if not html:continue
-                  parser=MainText();parser.feed(html)
-                  content=parser.content()
-                  if not content:
-                      other=BoundedBodyText();other.feed(html);content=other.content()
-                  excerpt=select_relevant_excerpt(content,q)
-                  if excerpt and len(excerpt)>65:
-                      print("CITE_READABLE",urlsplit(url).hostname,urlsplit(url).path[:110],
-                            "EXCERPT_LEN",len(excerpt),
-                            "PREVIEW",repr(excerpt[:95]),flush=True)
-                      found.append(url)
-                      if len(found)>=5:break
-              print("CITE_READABLE_TOTAL",len(found),flush=True)
-          asyncio.run(main())
-          PY
-      - name: Probe free scholarly discovery metadata and Bing News feed structure
-        run: |
-          python - <<'PY'
-          import asyncio, httpx
-          from urllib.parse import urlsplit
-          from xml.etree import ElementTree as ET
-          q="LEO GEO satellite maritime connectivity"
-          async def probe():
-            targets=[
-              ("openalex","https://api.openalex.org/works",{"search":q,"per-page":"8"}),
-              ("crossref","https://api.crossref.org/works",{"query":q,"rows":"6"}),
-              ("bingnews","https://www.bing.com/news/search",{"q":q,"format":"rss"}),
-            ]
-            async with httpx.AsyncClient(timeout=10,follow_redirects=False) as c:
-              for name,url,params in targets:
-                try:
-                  r=await c.get(url,params=params,headers={"User-Agent":"ChaL79Bot/1.4 research contact"})
-                  print("INDEX",name,"STATUS",r.status_code,"MIME",r.headers.get("content-type","")[:70],flush=True)
-                  if r.status_code != 200:continue
-                  if name=="openalex":
-                    for x in r.json().get("results",[])[:8]:
-                      loc=x.get("best_oa_location") or x.get("primary_location") or {}
-                      print("OA_ITEM",x.get("title","")[:90],
-                        (loc.get("landing_page_url") or "")[:180],flush=True)
-                  elif name=="crossref":
-                    for x in r.json().get("message",{}).get("items",[])[:6]:
-                      print("CROSSREF_ITEM"," ".join(x.get("title",[]))[:90],
-                        x.get("URL","")[:150],flush=True)
-                  else:
-                    root=ET.fromstring(r.content)
-                    print("BINGNEWS_ROOT",root.tag,flush=True)
-                    for x in list(root)[:3]:print("BINGNEWS_CHILD",x.tag,flush=True)
-                    for x in root.findall(".//item")[:6]:
-                      print("BINGNEWS_ITEM",x.findtext("title","")[:75],
-                            x.findtext("link","")[:140],flush=True)
-                except Exception as exc:
-                  print("INDEX_ERROR",name,type(exc).__name__,flush=True)
-          asyncio.run(probe())
-          PY
-      - name: Diagnose individual news publisher relevance before reading
-        run: |
-          python - <<'PY'
-          import asyncio,httpx
-          from urllib.parse import urlsplit
-          from free_research import parse_bing_news_rss,search_query_terms,source_relevance
-          q="Bandingkan internet satelit LEO dan GEO untuk kapal offshore, termasuk latency kelajuan liputan cuaca handover"
-          terms=search_query_terms(q)
-          variants=[" ".join(terms[:6]),"LEO GEO satellite maritime","satellite maritime offshore connectivity"]
-          async def main():
-            async with httpx.AsyncClient(timeout=9,follow_redirects=False) as client:
-              for phrase in variants:
-                try:
-                  r=await client.get("https://www.bing.com/news/search",params={"q":phrase,"format":"rss"})
-                  rows=parse_bing_news_rss(r.content,limit=15) if r.status_code==200 else []
-                  print("NEWS_VARIANT",phrase,"HTTP",r.status_code,"ROWS",len(rows),flush=True)
-                  for row in rows:
-                    print("NEWS_SCORE",source_relevance(row,terms),
-                      urlsplit(row["url"]).hostname,row["title"][:90],flush=True)
-                except Exception as e:
-                  print("NEWS_PROBE_FAILED",type(e).__name__,flush=True)
-          asyncio.run(main())
-          PY
-      - name: Require two independent topical verified page excerpts
+      - name: Verify independent real HTML evidence, source-bound quotations
         env:
           ENABLE_GENERAL_PUBLIC_READER: '1'
         run: |
           python - <<'PY'
           import asyncio
+          import re
           from urllib.parse import urlsplit
           from free_research import public_source_search
           from source_reader import enrich_with_read_excerpts
+          from gemini_advanced import verified_source_quotes
 
-          question = ("Bandingkan internet satelit LEO dan GEO untuk kapal offshore, "
-                      "termasuk latency, kelajuan, liputan, kesan cuaca dan handover. "
-                      "Dapatkan petikan HTML sebenar daripada dua domain bebas.")
+          question = (
+              "Bandingkan internet satelit LEO dan GEO untuk kapal offshore, "
+              "termasuk latency, kelajuan, liputan, kesan cuaca dan handover. "
+              "Dapatkan petikan HTML sebenar daripada dua domain bebas."
+          )
+
+          def topical_excerpt(record):
+              excerpt = record.get("excerpt", "").casefold()
+              title = record.get("title", "").casefold()
+              has_orbit = bool(re.search(
+                  r"\b(?:leo|geo|geostationary|satellite|satelit|orbit|constellation)\b",
+                  excerpt))
+              has_marine = bool(re.search(
+                  r"\b(?:maritime|offshore|vessels?|ships?|connectivity|broadband|communications?)\b",
+                  excerpt + " " + title))
+              return has_orbit and has_marine
+
           async def main():
-              found = await public_source_search(question)
-              print("DISCOVERED_COUNT", len(found), flush=True)
-              for item in found:
-                  print("DISCOVERED", urlsplit(item["url"]).hostname,
-                        item.get("title", "")[:90], flush=True)
-              enriched = await enrich_with_read_excerpts(question, found)
-              verified = [item for item in enriched
+              discovered = await public_source_search(question)
+              print("DISCOVERED_COUNT", len(discovered), flush=True)
+              evidence = await enrich_with_read_excerpts(question, discovered)
+              verified = [item for item in evidence
                           if item.get("read_status") == "verified_page_excerpt"
-                          and bool(item.get("excerpt"))]
-              for item in enriched:
-                  print("READ_STATUS", item.get("read_status"),
+                          and item.get("excerpt") and topical_excerpt(item)]
+              for item in evidence:
+                  print("EVIDENCE", item.get("read_status"),
                         urlsplit(item.get("url", "")).hostname,
-                        item.get("title", "")[:90], flush=True)
-              topical = []
-              for item in verified:
-                  words = (item.get("title", "") + " " + item.get("excerpt", "")).casefold()
-                  # Match the subject, not a generic latency networking definition.
-                  if (("leo" in words or "geo" in words or "low earth orbit" in words
-                       or "geostationary" in words)
-                      and ("satellite" in words or "satelit" in words
-                           or "orbit" in words)):
-                      topical.append(item)
+                        item.get("title", "")[:80],
+                        "EXCERPT_CHARS", len(item.get("excerpt", "")),
+                        flush=True)
               hosts = {urlsplit(item["url"]).hostname.removeprefix("www.")
-                       for item in topical}
+                       for item in verified}
               print("TOPICAL_VERIFIED_HOSTS", sorted(hosts), flush=True)
               assert len(hosts) >= 2, (
-                  "FAIL: fewer than 2 independent real LEO/GEO satellite "
-                  "HTML excerpts. Do not merge/deploy.")
+                  "FAIL: fewer than 2 independent relevant publisher HTML "
+                  "excerpts. Never merge or deploy on this result.")
+
+              quotes = verified_source_quotes(evidence)
+              for number, item in enumerate(evidence[:8], 1):
+                  if item.get("read_status") != "verified_page_excerpt":
+                      continue
+                  excerpt_lines = [" ".join(line.split())
+                                   for line in item["excerpt"].splitlines()]
+                  source_line = next((line for line in excerpt_lines
+                                      if len(line.split()) >= 6), "")
+                  if not source_line:
+                      continue
+                  exact = " ".join(source_line.split()[:20])
+                  assert f'[{number}]' in quotes
+                  assert item["url"] in quotes
+                  assert f'Petikan disahkan: "{exact}"' in quotes, (
+                      "FAIL: source quote not copied verbatim from own excerpt")
+              print("SOURCE_QUOTES_BOUND", True, flush=True)
           asyncio.run(main())
           PY
