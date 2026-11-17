@@ -10,7 +10,8 @@ from unittest.mock import AsyncMock
 
 from tts_service import (
     DEFAULT_VOICE, VOICE_CHOICES, MAX_SPEECH_CHARS,
-    prepare_speech_text, speech_enabled, synthesize_malay_speech,
+    prepare_speech_text, normalize_malay_pronunciation,
+    speech_enabled, synthesize_malay_speech,
 )
 
 
@@ -28,6 +29,45 @@ class TtsTests(unittest.IsolatedAsyncioTestCase):
         self.assertLessEqual(len(prepare_speech_text("hello " * 2000)),
                              MAX_SPEECH_CHARS + 65)
         self.assertEqual(prepare_speech_text(""), "")
+
+    def test_natural_malay_spoken_decades_and_bot_name(self):
+        spoken = prepare_speech_text(
+            "Saya ChaL79Bot, pembantu AI peribadi. "
+            "Saya suka muzik rock era 70–80."
+        )
+        self.assertIn("Chal tujuh puluh sembilan bot", spoken)
+        self.assertIn("pembantu kecerdasan buatan", spoken)
+        self.assertIn("era tujuh puluhan dan lapan puluhan", spoken)
+        self.assertNotIn("70–80", spoken)
+        self.assertEqual(
+            normalize_malay_pronunciation("zaman 80-an"),
+            "zaman lapan puluhan",
+        )
+        self.assertEqual(
+            normalize_malay_pronunciation("era 1970-an"),
+            "era tujuh puluhan",
+        )
+
+    def test_important_numbers_stay_unchanged(self):
+        samples = [
+            "Harga BND 70–80, bukan 90.",
+            "LDT Muara 13 Nov 2026, 14:09. Jumlah 9 unit.",
+            "SL 4112 dan TP 4122.",
+            "MR 2026-001031. 70-80 kg.",
+        ]
+        for sample in samples:
+            with self.subTest(sample=sample):
+                self.assertEqual(normalize_malay_pronunciation(sample), sample)
+        self.assertLessEqual(
+            len(prepare_speech_text("ChaL79Bot " * 350)),
+            MAX_SPEECH_CHARS,
+        )
+        self.assertEqual(
+            prepare_speech_text("Hello, " + "test " * 400).endswith(
+                "Jawapan penuh ada dalam mesej teks."
+            ),
+            True,
+        )
 
     async def test_synthesis_is_memory_only(self):
         captured = []
