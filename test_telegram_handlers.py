@@ -24,6 +24,7 @@ def extract_handlers(*names, extras=None):
         "asyncio": asyncio,
         "os": os,
         "PurePath": PurePath,
+        "SYSTEM_PROMPT": "Test assistant",
         "MAX_NOTES": MAX_NOTES,
         "MAX_IMAGE_BYTES": MAX_IMAGE_BYTES,
         "MAX_DOCUMENT_BYTES": MAX_DOCUMENT_BYTES,
