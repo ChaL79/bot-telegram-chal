@@ -49,6 +49,9 @@ RESEARCH_PROMPT = (
     "akan memaparkan petikan sebenar daripada setiap halaman yang dibaca. "
     "Tulis analisis menggunakan parafrasa dan rujukan nombor sahaja. "
     "Ringkaskan dapatan, bandingkan sumber yang ada, dan beri langkah semakan selanjutnya. "
+    "Pastikan SEMUA aspek nyata dalam soalan pengguna disentuh. Bagi aspek yang belum "
+    "disokong petikan halaman, tulis 'belum disahkan oleh sumber dibaca', "
+    "bukan mengisi kekosongan daripada metadata, andaian atau dakwaan pemasaran. "
     "Jangan buat transaksi, ubah kod, deploy atau menghantar mesej luaran."
 )
 POWER_PROMPT = (
@@ -156,8 +159,16 @@ def verified_source_quotes(sources: list[dict], *, limit_words: int = 20) -> str
                 or not isinstance(source.get("excerpt"), str)):
             continue
         candidates = [" ".join(line.split()) for line in source["excerpt"].splitlines()]
-        # A complete source line is preferable to a partial navigation fragment.
-        selected = next((line for line in candidates if len(line.split()) >= 6), "")
+        # Do not present an exact article title as if it were a factual body
+        # quotation. A quote must come from one actual excerpt line.
+        title_normalized = " ".join(str(source.get("title", "")).split()).casefold().strip(" :.-")
+        body_lines = [
+            line for line in candidates
+            if len(line.split()) >= 6
+            and line.casefold().strip(" :.-") != title_normalized
+        ]
+        selected = next((line for line in body_lines if len(line.split()) >= 8),
+                        body_lines[0] if body_lines else "")
         if not selected:
             continue
         quote = " ".join(selected.split()[:limit_words])
