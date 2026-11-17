@@ -155,6 +155,7 @@ class FreeResearchTests(unittest.IsolatedAsyncioTestCase):
         terms = search_query_terms(q)
         self.assertEqual(terms[:3], ["satellite", "leo", "geo"])
         self.assertIn("offshore", terms)
+        self.assertIn("maritime", terms)
         self.assertIn("speed", terms)
         self.assertIn("coverage", terms)
         self.assertIn("weather", terms)
