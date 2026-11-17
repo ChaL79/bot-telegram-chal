@@ -33,6 +33,16 @@ jobs:
               ("orbit_full_names", "low earth orbit geostationary satellite maritime"),
               ("ship_coverage", "satellite broadband offshore vessels GEO LEO"),
               ("comparison", "LEO vs GEO satellite latency coverage handover"),
+              ("anchor_satellite", "satellite communication maritime offshore"),
+              ("anchor_network", "satellite internet geostationary maritime"),
+              ("anchor_satellite_orbits", "satellite orbit geostationary low earth"),
+              ("anchor_satellite_leo_geo", "satellite LEO GEO maritime"),
+              ("anchor_vsat", "VSAT maritime offshore satellite connectivity"),
+              ("anchor_geo", "geostationary satellite maritime communications"),
+              ("anchor_leo", "satellite constellation maritime broadband"),
+              ("anchor_marine", "maritime satellite internet latency"),
+              ("anchor_geo_leo_expanded", "satellite network orbit altitude latency maritime"),
+              ("anchor_multiorbit", "satellite multi orbit maritime connectivity"),
           ]
           async def probe(label, q):
               try:
