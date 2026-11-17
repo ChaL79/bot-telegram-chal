@@ -531,6 +531,17 @@ def parse_wikipedia(data: dict, limit: int = 3) -> list[dict]:
     return result
 
 
+def canonical_article_key(url: str) -> tuple[str, str, str, str]:
+    """Deduplicate same-host AMP aliases without fetching or rewriting URLs."""
+    parsed = urlsplit(url)
+    parts = (parsed.path or "/").split("/")
+    if len(parts) > 2 and parts[1].casefold() == "amp":
+        parts.pop(1)
+    path = "/".join(parts).rstrip("/") or "/"
+    return (parsed.scheme.casefold(), (parsed.hostname or "").casefold(),
+            path, parsed.query)
+
+
 def readable_article_priority(item: dict) -> int:
     """Prefer safe direct article/doc URLs over RSS redirects and marketing landing pages.
 
@@ -1002,9 +1013,18 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
             ranked = institutional + [
                 pair for pair in ranked if pair[1]["url"] not in used_urls
             ]
+        # AMP /amp/news/... and conventional /news/... paths can describe
+        # the same article. This is discovery de-duplication, NOT verification.
+        canonical_seen, unique_ranked = set(), []
+        for pair in ranked:
+            key = canonical_article_key(pair[1]["url"])
+            if key in canonical_seen:
+                continue
+            canonical_seen.add(key)
+            unique_ranked.append(pair)
         log.info("Public source search selected %d of %d unique results (technical=%s)",
-                 min(len(ranked), MAX_SOURCES), len(urls), tech)
-        return [item for _score, item in ranked[:MAX_SOURCES]]
+                 min(len(unique_ranked), MAX_SOURCES), len(urls), tech)
+        return [item for _score, item in unique_ranked[:MAX_SOURCES]]
 
     if client is not None:
         return await search(client)
