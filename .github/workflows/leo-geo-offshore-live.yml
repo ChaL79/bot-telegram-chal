@@ -169,6 +169,47 @@ jobs:
           async def main():await asyncio.gather(*(run(*p) for p in probes))
           asyncio.run(main())
           PY
+      - name: Probe discovered encyclopedia citations with the safe HTML reader
+        run: |
+          python - <<'PY'
+          import asyncio, httpx
+          from urllib.parse import urlsplit
+          from public_article_reader import safe_public_article_url, read_public_html
+          from source_reader import MainText, BoundedBodyText, select_relevant_excerpt
+          topics=("Satellite Internet access","Low Earth orbit","Geostationary orbit",
+                  "Communications satellite","Satellite internet constellation")
+          q="LEO GEO satellite maritime offshore latency weather handover broadband"
+          async def main():
+              async with httpx.AsyncClient(timeout=12) as client:
+                  r=await client.get("https://en.wikipedia.org/w/api.php",params={
+                      "action":"query","titles":"|".join(topics),"prop":"extlinks",
+                      "ellimit":"100","format":"json"})
+              print("CITE_API",r.status_code,flush=True)
+              entries=[]
+              for page in r.json().get("query",{}).get("pages",{}).values():
+                  for item in page.get("extlinks",[]):
+                      url=item.get("*") or item.get("url") or ""
+                      if safe_public_article_url(url) and url not in entries:
+                          entries.append(url)
+              print("CITE_DISCOVERED",len(entries),flush=True)
+              found=[]
+              for url in entries[:50]:
+                  html=await read_public_html(url)
+                  if not html:continue
+                  parser=MainText();parser.feed(html)
+                  content=parser.content()
+                  if not content:
+                      other=BoundedBodyText();other.feed(html);content=other.content()
+                  excerpt=select_relevant_excerpt(content,q)
+                  if excerpt and len(excerpt)>65:
+                      print("CITE_READABLE",urlsplit(url).hostname,urlsplit(url).path[:110],
+                            "EXCERPT_LEN",len(excerpt),
+                            "PREVIEW",repr(excerpt[:95]),flush=True)
+                      found.append(url)
+                      if len(found)>=5:break
+              print("CITE_READABLE_TOTAL",len(found),flush=True)
+          asyncio.run(main())
+          PY
       - name: Require two independent topical verified page excerpts
         env:
           ENABLE_GENERAL_PUBLIC_READER: '1'
