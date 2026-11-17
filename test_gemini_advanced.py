@@ -56,6 +56,32 @@ class AdvancedTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Samsung NVMe SSDs with PCIe", cleaned)
         self.assertIn("IBM:", cleaned)
 
+    def test_prefers_real_body_quote_over_identical_article_title(self):
+        from gemini_advanced import verified_source_quotes, RESEARCH_PROMPT
+        source = [{
+            "title": "LEO Satellite Networks: Supporting Maritime Safety",
+            "url": "https://publisher.example.org/amp/news/leo-satellite",
+            "read_status": "verified_page_excerpt",
+            "excerpt": ("LEO Satellite Networks: Supporting Maritime Safety\n"
+                        "Satellite networks in low Earth orbit support faster connections "
+                        "for offshore maritime vessels."),
+        }]
+        output = verified_source_quotes(source)
+        self.assertIn('Petikan disahkan: "Satellite networks in low Earth orbit', output)
+        self.assertNotIn('Petikan disahkan: "LEO Satellite Networks:', output)
+        self.assertIn("SEMUA aspek", RESEARCH_PROMPT)
+        self.assertIn("belum disahkan", RESEARCH_PROMPT)
+
+    def test_only_article_title_is_not_misrepresented_as_body_quote(self):
+        from gemini_advanced import verified_source_quotes
+        source = [{
+            "title": "Satellite internet connectivity for offshore maritime vessels",
+            "url": "https://publisher.example.org/article",
+            "read_status": "verified_page_excerpt",
+            "excerpt": "Satellite internet connectivity for offshore maritime vessels",
+        }]
+        self.assertEqual(verified_source_quotes(source), "")
+
     async def test_deepdive_replaces_model_misattributed_quote_with_verified_source(self):
         from unittest.mock import patch
         sources = [

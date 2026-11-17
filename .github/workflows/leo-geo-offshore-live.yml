@@ -77,15 +77,19 @@ jobs:
                       continue
                   excerpt_lines = [" ".join(line.split())
                                    for line in item["excerpt"].splitlines()]
-                  source_line = next((line for line in excerpt_lines
-                                      if len(line.split()) >= 6), "")
-                  if not source_line:
+                  title = " ".join(item.get("title","").split()).casefold().strip(" :.-")
+                  body = [line for line in excerpt_lines
+                          if len(line.split()) >= 6
+                          and line.casefold().strip(" :.-") != title]
+                  if not body:
+                      # No quote permitted if source excerpt only contains title.
                       continue
-                  exact = " ".join(source_line.split()[:20])
+                  selected = next((line for line in body if len(line.split()) >= 8), body[0])
+                  exact = " ".join(selected.split()[:20])
                   assert f'[{number}]' in quotes
                   assert item["url"] in quotes
                   assert f'Petikan disahkan: "{exact}"' in quotes, (
-                      "FAIL: source quote not copied verbatim from own excerpt")
+                      "FAIL: source quote not copied verbatim from own body excerpt")
               print("SOURCE_QUOTES_BOUND", True, flush=True)
           asyncio.run(main())
           PY

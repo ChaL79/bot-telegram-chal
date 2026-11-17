@@ -7,6 +7,7 @@ from free_research import (
     allowed_source_url, parse_rss, parse_wikipedia, public_source_search,
     evidence_text, references_text, search_query_terms, source_relevance,
     parse_stackexchange, parse_hackernews, parse_bing_news_rss,
+    canonical_article_key,
 )
 
 
@@ -225,6 +226,39 @@ class FreeResearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(results[0]["url"], good)
         self.assertIn("not yet verified", results[0]["provider"])
         self.assertEqual(parse_bing_news_rss(b"<!DOCTYPE rss><rss/>"), [])
+
+    def test_amp_alias_is_same_article_not_same_as_unrelated_hosts(self):
+        a = "https://publisher.example.org/amp/news/story"
+        b = "https://publisher.example.org/news/story"
+        self.assertEqual(canonical_article_key(a), canonical_article_key(b))
+        self.assertNotEqual(canonical_article_key(b + "?x=2"), canonical_article_key(b))
+        self.assertNotEqual(
+            canonical_article_key("https://other.publisher.example.org/news/story"),
+            canonical_article_key(b))
+
+    async def test_amp_alias_not_counted_twice_in_universal_discovery(self):
+        rss = b"""<rss><channel>
+        <item><title>LEO GEO satellite maritime vessel communications</title>
+        <link>https://publisher.example.org/amp/news/leo-satellite</link>
+        <description>Offshore satellite low earth orbit</description></item>
+        <item><title>LEO GEO satellite maritime vessel communications</title>
+        <link>https://publisher.example.org/news/leo-satellite</link>
+        <description>Offshore satellite low earth orbit</description></item>
+        <item><title>LEO GEO satellite offshore coverage handover</title>
+        <link>https://second.example.net/article/leo-geo-maritime</link>
+        <description>Satellite offshore communications</description></item>
+        </channel></rss>"""
+        def mock(req):
+            if req.url.host == "www.bing.com" and req.url.path == "/search":
+                return httpx.Response(200, content=rss)
+            if req.url.host == "en.wikipedia.org":
+                return httpx.Response(200, json={"query": {"search": []}})
+            return httpx.Response(404)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as client:
+            out = await public_source_search(
+                "LEO GEO satellite maritime vessel coverage handover", client=client)
+        self.assertEqual(len({canonical_article_key(x["url"]) for x in out}), len(out))
+        self.assertEqual(len(out), 2)
 
     async def test_news_fallback_recovers_independent_satellite_publishers(self):
         from urllib.parse import quote
