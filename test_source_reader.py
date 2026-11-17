@@ -842,6 +842,41 @@ No content on data practices.
         self.assertEqual(result[0]["read_status"],"verified_page_excerpt")
         self.assertIn("NVMe",result[0]["excerpt"])
 
+    async def test_leo_geo_excerpt_evidence_two_independent_live_like_pages(self):
+        from unittest.mock import patch
+        q = ("Bandingkan internet satelit LEO dan GEO untuk kapal offshore: "
+             "latency, kelajuan, liputan, cuaca dan handover.")
+        refs = [
+            {"title": "LEO and GEO satellite network", "provider": "Bing RSS",
+             "url": "https://orbitalpha.org/guides/leo-geo-satellite-maritime",
+             "snippet": "Offshore satellite broadband", "published": ""},
+            {"title": "LEO satellite maritime handover", "provider": "Bing RSS",
+             "url": "https://orbitbeta.net/articles/leo-satellite-handover",
+             "snippet": "Maritime satellite connectivity", "published": ""},
+        ]
+        async def fake_html(url, *, client=None):
+            if "orbitalpha.org" in url:
+                return ("<html><main><p>LEO and GEO satellite networks differ in "
+                        "latency and ocean coverage for offshore vessels.</p></main></html>")
+            if "orbitbeta.net" in url:
+                return ("<html><main><p>LEO satellite maritime connectivity "
+                        "uses frequent handover while ships travel offshore.</p>"
+                        "</main></html>")
+            raise AssertionError("Unexpected URL")
+        with patch.dict("os.environ", {"ENABLE_GENERAL_PUBLIC_READER": "1"}):
+            with patch("source_reader.read_public_html", side_effect=fake_html):
+                result = await enrich_with_read_excerpts(q, refs)
+        verified = [r for r in result if r.get("read_status") == "verified_page_excerpt"]
+        self.assertEqual(len(verified), 2)
+        self.assertEqual({r["url"].split("/")[2] for r in verified},
+                         {"orbitalpha.org", "orbitbeta.net"})
+        self.assertTrue(all("satellite" in r["excerpt"].lower() for r in verified))
+        from gemini_advanced import verified_source_quotes
+        quotes = verified_source_quotes(result)
+        self.assertIn("[1] LEO and GEO satellite network", quotes)
+        self.assertIn("[2] LEO satellite maritime handover", quotes)
+        self.assertIn("uses frequent handover", quotes)
+
     async def test_bilingual_official_fatigue_fallbacks_use_real_excerpts(self):
         from unittest.mock import patch
         from source_reader import requested_fatigue_official_refs
