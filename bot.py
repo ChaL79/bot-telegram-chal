@@ -26,6 +26,9 @@ from media_tools import (analyze_image, analyze_pdf, extract_document_text,
                          MAX_DOCUMENT_BYTES, ALLOWED_DOCUMENT_EXTENSIONS)
 from memory_notes import (get_pinned_notes, write_pinned_notes,
                           validate_new_note, MAX_NOTES)
+from natural_chat import (build_chat_messages, read_conversation,
+                          record_conversation, clear_conversation,
+                          valid_ai_response)
 
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL")
@@ -214,6 +217,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "ChaL79Bot — Fungsi Peribadi:\n"
         "• Chat biasa: hantar soalan teks\n"
         "• Voice note: hantar rakaman, saya jawab dalam teks + suara\n"
+        "• Chat biasa & voice note berkongsi konteks 6 pertukaran terkini\n"
+        "• /newchat — kosongkan perbualan sementara (nota /remember kekal)\n"
         "• /voice auto|all|off — kawal bila bot bercakap\n"
         "• /voice lelaki|wanita — pilihan suara Bahasa Melayu\n"
         "• /speak TEKS — dengar teks sebagai voice note\n"
@@ -523,6 +528,46 @@ async def speak_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not ok:
         await msg.reply_text("Suara tidak tersedia sekarang. Cuba lagi atau guna teks biasa.")
 
+async def reply_with_context(context: ContextTypes.DEFAULT_TYPE,
+                             chat_id: int, question: str) -> str:
+    """One locked conversation for both voice notes and typed messages.
+
+    The model gets only bounded RAM history; failed calls do not enter history.
+    Persistent /remember notes remain independently controlled by owner.
+    """
+    state = context.chat_data
+    lock = state.setdefault("_natural_chat_lock_v1", asyncio.Lock())
+    async with lock:
+        notes = await read_user_notes(context, chat_id)
+        history = read_conversation(state)
+        messages = build_chat_messages(question, notes, history, notes_as_instruction)
+        try:
+            response = await asyncio.wait_for(ask_ai(messages), timeout=55)
+        except asyncio.TimeoutError:
+            return "Maaf, respons mengambil masa terlalu lama. Cuba lagi sebentar ya."
+        except Exception:
+            log.exception("Natural conversation AI request failed")
+            return FINAL_ERROR_MESSAGE
+        if valid_ai_response(response, FINAL_ERROR_MESSAGE):
+            record_conversation(state, question, response)
+        return response
+
+
+async def newchat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Owner-only reset for recent voice/text history, not pinned memory."""
+    msg = update.effective_message
+    if not msg or not is_private_owner_update(update):
+        return
+    state = context.chat_data
+    lock = state.setdefault("_natural_chat_lock_v1", asyncio.Lock())
+    async with lock:
+        clear_conversation(state)
+    await msg.reply_text(
+        "Perbualan sementara sudah dikosongkan. "
+        "Nota kekal /remember masih disimpan."
+    )
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
     if not msg or not msg.text or not is_private_owner_update(update):
@@ -540,20 +585,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-    notes = await read_user_notes(context, update.effective_chat.id)
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT + notes_as_instruction(notes)},
-        {"role": "user", "content": msg.text},
-    ]
-    try:
-        reply = await asyncio.wait_for(ask_ai(messages), timeout=55)
-    except asyncio.TimeoutError:
-        reply = "Maaf, respons mengambil masa terlalu lama. Cuba lagi sebentar ya."
-    except Exception:
-        log.exception("Unhandled error semasa ask_ai")
-        reply = FINAL_ERROR_MESSAGE
+    reply = await reply_with_context(context, update.effective_chat.id, msg.text)
     await msg.reply_text(reply[:4000])
-    await send_spoken_reply(update, context, reply, is_voice_note=False)
+    if valid_ai_response(reply, FINAL_ERROR_MESSAGE):
+        await send_spoken_reply(update, context, reply, is_voice_note=False)
 
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -585,21 +620,10 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.reply_text("Maaf, saya tidak dapat memahami voice note ini. Cuba lagi.")
             return
 
-        notes = await read_user_notes(context, update.effective_chat.id)
-        messages = [
-            {"role": "system", "content": SYSTEM_PROMPT + notes_as_instruction(notes)},
-            {"role": "user", "content": transcript},
-        ]
-        try:
-            reply = await asyncio.wait_for(ask_ai(messages), timeout=55)
-        except asyncio.TimeoutError:
-            reply = "Maaf, respons mengambil masa terlalu lama. Cuba lagi sebentar ya."
-        except Exception:
-            log.exception("Ralat semasa ask_ai (voice)")
-            reply = FINAL_ERROR_MESSAGE
-
+        reply = await reply_with_context(context, update.effective_chat.id, transcript)
         await msg.reply_text(reply[:4000])
-        await send_spoken_reply(update, context, reply, is_voice_note=True)
+        if valid_ai_response(reply, FINAL_ERROR_MESSAGE):
+            await send_spoken_reply(update, context, reply, is_voice_note=True)
     finally:
         cleanup_voice_tempfiles(ogg_path, wav_path)
 
@@ -717,6 +741,7 @@ def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("myid", myid))
     application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("newchat", newchat_command))
     application.add_handler(CommandHandler("voice", voice_command))
     application.add_handler(CommandHandler("speak", speak_command))
     for memory_command in ("remember", "memories", "forget", "clearmemory"):
