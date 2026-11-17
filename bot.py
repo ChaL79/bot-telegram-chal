@@ -183,15 +183,21 @@ async def transcribe_voice(file_path: str):
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Exclusive personal bot: silently ignore non-owner users and group chats."""
+    if not update.effective_message or not is_private_owner_update(update):
+        return
     await update.effective_message.reply_text(
         "Hai! Saya pembantu peribadi anda. Hantar mesej teks atau voice note ya."
     )
 
 
 async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Reply with the requester's Telegram ID, for owner-only configuration."""
-    if update.effective_message and update.effective_user:
-        await update.effective_message.reply_text(f"Telegram user ID anda: {update.effective_user.id}")
+    """Show the configured owner's ID only to that owner in private chat."""
+    if not update.effective_message or not is_private_owner_update(update):
+        return
+    await update.effective_message.reply_text(
+        f"Telegram user ID anda: {update.effective_user.id}"
+    )
 
 
 async def gemini_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
