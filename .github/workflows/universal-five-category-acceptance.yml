@@ -1,0 +1,103 @@
+name: Universal research five-category acceptance
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/universal-five-category-acceptance.yml'
+permissions:
+  contents: read
+jobs:
+  public-evidence:
+    name: 'Live evidence: ${{ matrix.category }}'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - category: offshore-fatigue
+            question: 'Deep research pengurusan keletihan fatigue pekerja offshore dan shift work. Semak dokumentasi rasmi CDC NIOSH dan HSE tentang keselamatan pekerjaan dan kurang tidur.'
+          - category: google-ai
+            question: 'Deep research Google AI Studio dan Google Flow: dokumentasi rasmi, fungsi dan ketersediaan di Brunei. Bezakan metadata dan kandungan laman rasmi.'
+          - category: wcag-standards
+            question: 'Deep research WCAG 2.2 W3C MDN dan GOV.UK: accessibility keyboard navigation focus visible dan keperluan laman web.'
+          - category: ssd-products
+            question: 'Deep research Samsung SSD NVMe PCIe dan SATA serta IBM NVMe technical documentation: speed latency M.2 compatibility dan pilihan menaik taraf laptop.'
+          - category: sea-level-science
+            question: 'Deep research NOAA NASA sea level rise: punca thermal expansion ocean warming melting land ice glaciers dan bukti saintifik.'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned free dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Verify real independent HTML evidence and provenance without paid API
+        env:
+          ENABLE_GENERAL_PUBLIC_READER: '1'
+          TEST_CATEGORY: ${{ matrix.category }}
+          TEST_QUESTION: ${{ matrix.question }}
+        run: |
+          python - <<'PY'
+          import asyncio
+          import os
+          import re
+          from urllib.parse import urlsplit
+          from free_research import public_source_search
+          from source_reader import enrich_with_read_excerpts
+          from gemini_advanced import verified_source_quotes
+
+          category = os.environ["TEST_CATEGORY"]
+          question = os.environ["TEST_QUESTION"]
+          def host(item):
+              return (urlsplit(item.get("url") or "").hostname or "").lower()
+          def independently_supported(verified):
+              hosts = {host(x) for x in verified}
+              if category == "offshore-fatigue":
+                  return {"www.cdc.gov", "www.hse.gov.uk"}.issubset(hosts)
+              if category == "google-ai":
+                  # All selected docs belong to Google; require one real official excerpt.
+                  return any(h in hosts for h in (
+                      "blog.google", "support.google.com", "aistudio.google.com"))
+              if category == "wcag-standards":
+                  return len(hosts & {"www.w3.org", "developer.mozilla.org",
+                                      "www.gov.uk"}) >= 2
+              if category == "ssd-products":
+                  return {"semiconductor.samsung.com", "www.ibm.com"}.issubset(hosts)
+              if category == "sea-level-science":
+                  return (any("climate.gov" in h or h.endswith(".noaa.gov") for h in hosts)
+                          and any(h.endswith(".nasa.gov") for h in hosts))
+              raise ValueError("Unsupported category")
+
+          async def main():
+              found = await public_source_search(question)
+              evidence = await enrich_with_read_excerpts(question, found)
+              verified = [
+                  r for r in evidence
+                  if r.get("read_status") == "verified_page_excerpt"
+                  and isinstance(r.get("excerpt"), str)
+                  and len(r["excerpt"]) >= 65
+              ]
+              for item in evidence:
+                  print("EVIDENCE", category, item.get("read_status"),
+                        host(item), "CHARS", len(item.get("excerpt") or ""),
+                        flush=True)
+              print("VERIFIED_HOSTS", category, sorted({host(x) for x in verified}), flush=True)
+              # No article content is printed to CI logs.
+              assert independently_supported(verified), (
+                  "Acceptance failed: required authentic independent topical "
+                  "HTML evidence not retrieved; never claim completion")
+              quotes = verified_source_quotes(evidence)
+              for item in verified:
+                  # Reader and deterministic quote mechanism are assessed
+                  # together, but no model-authored quotation is accepted.
+                  assert item["url"] in quotes or not any(
+                      len(line.split()) >= 6 and
+                      " ".join(line.split()).casefold().strip(" :.-")
+                      != " ".join(item.get("title","").split()).casefold().strip(" :.-")
+                      for line in item["excerpt"].splitlines()
+                  )
+              print("ACCEPTED", category, "VERIFIED_COUNT", len(verified), flush=True)
+          asyncio.run(main())
+          PY
