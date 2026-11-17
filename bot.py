@@ -199,6 +199,29 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Private owner-only command reference for new supported features."""
+    if not update.effective_message or not is_private_owner_update(update):
+        return
+    await update.effective_message.reply_text(
+        "ChaL79Bot — Fungsi Peribadi:\n"
+        "• Chat biasa: hantar soalan teks\n"
+        "• Voice note: hantar rakaman, saya jawab dalam teks\n"
+        "• Gambar: hantar foto + caption soalan (hingga 4 MB)\n"
+        "• Dokumen: PDF, DOCX, XLSX, TXT, MD, CSV (hingga 3 MB)\n"
+        "• /gemini SOALAN — sembang dengan memori sementara\n"
+        "• /power SOALAN — analisis teknikal\n"
+        "• /deepdive SOALAN — carian sumber dan petikan terpilih\n"
+        "• /remember NOTA — simpan nota pilihan sebagai pinned message\n"
+        "• /memories — lihat nota kekal\n"
+        "• /forget N — padam nota bernombor N\n"
+        "• /clearmemory — kosongkan nota kekal\n"
+        "• /resetmemory — kosongkan sejarah Gemini sementara\n"
+        "Nota: memori pinned Telegram bukan peti simpanan rahsia; "
+        "jangan simpan token, kata laluan atau maklumat sensitif."
+    )
+
+
 async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show the configured owner's ID only to that owner in private chat."""
     if not update.effective_message or not is_private_owner_update(update):
@@ -562,6 +585,7 @@ def main():
     application = Application.builder().token(TOKEN).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("myid", myid))
+    application.add_handler(CommandHandler("help", help_command))
     for memory_command in ("remember", "memories", "forget", "clearmemory"):
         application.add_handler(CommandHandler(memory_command, personal_memory_command))
     application.add_handler(CommandHandler("gemini", gemini_command))
