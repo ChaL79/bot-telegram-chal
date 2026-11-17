@@ -97,6 +97,8 @@ class VoiceHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
             "AudioSegment": SimpleNamespace(from_file=lambda *args, **kw: FakeAudio()),
             "SYSTEM_PROMPT": "test", "FINAL_ERROR_MESSAGE": "fallback",
             "transcribe_voice": simulated_transcribe, "ask_ai": simulated_ask_ai,
+            "read_user_notes": AsyncMock(return_value=[]),
+            "notes_as_instruction": lambda notes: "",
             "cleanup_voice_tempfiles": cleanup_voice_tempfiles,
             "is_private_owner_update": lambda update: True,
             "log": logging.getLogger("voice_handler_test"),

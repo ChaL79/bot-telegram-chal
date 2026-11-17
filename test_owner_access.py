@@ -32,6 +32,8 @@ def handlers_under_test():
         "FINAL_ERROR_MESSAGE": "Service unavailable",
         "log": logging.getLogger("owner_access_test"),
         "ask_ai": AsyncMock(return_value="Authorized answer"),
+        "read_user_notes": AsyncMock(return_value=[]),
+        "notes_as_instruction": lambda notes: "",
     }
     exec(compile(ast.Module(body=selected, type_ignores=[]),
                  filename="bot.py", mode="exec"), namespace)
