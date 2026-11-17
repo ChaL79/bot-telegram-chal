@@ -181,6 +181,7 @@ def _terms(value: str) -> list[str]:
     # "Wi-Fi 7", "WiFi7", and "WiFi 7" all get wifi7 + wifi; the same
     # normalization is applied to titles/snippets when scoring RSS hits.
     value = value.casefold()
+    value = re.sub(r"\balam\s+sekitar\b", "persekitaran", value)
     value = re.sub(r"\bwi[\s-]*fi\b", "wifi", value)
     value = re.sub(r"\btp[\s-]*link\b", "tplink", value)
     value = re.sub(r"\bmulti[\s-]*link\b", "multilink", value)
