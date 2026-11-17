@@ -186,5 +186,48 @@ class MemoryCommandGuidanceTests(unittest.IsolatedAsyncioTestCase):
         ctx.bot.send_chat_action.assert_not_awaited()
 
 
+class PdfTimeoutHandlerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_pdf_transport_failure_uses_text_fallback_and_owner_guard(self):
+        from media_tools import should_fallback_pdf
+        pdf = b"%PDF-1.7 example"
+        source = SimpleNamespace(
+            file_size=len(pdf),
+            download_as_bytearray=AsyncMock(return_value=bytearray(pdf)))
+        bot = SimpleNamespace(
+            send_chat_action=AsyncMock(), get_file=AsyncMock(return_value=source))
+        summarize = AsyncMock(return_value="Ringkasan teks PDF")
+        primary = AsyncMock(return_value="Analisis PDF gagal atau tamat masa. Cuba fail lebih kecil.")
+        ns = extract_handlers("handle_document", extras={
+            "ask_ai": summarize,
+            "analyze_pdf": primary,
+            "analyze_image": AsyncMock(),
+            "extract_pdf_text": lambda data: "Ini ialah isi dokumen.",
+            "should_fallback_pdf": should_fallback_pdf,
+            "SYSTEM_PROMPT": "Test assistant",
+            "FINAL_ERROR_MESSAGE": "Unavailable",
+            "MODEL_DEFAULT": "gemini-3.5-flash-lite",
+            "GROQ_API_KEY": "test-key",
+        })
+        def make_update(user):
+            return SimpleNamespace(
+                effective_user=SimpleNamespace(id=user),
+                effective_chat=SimpleNamespace(id=321, type="private"),
+                effective_message=SimpleNamespace(
+                    document=SimpleNamespace(
+                        file_name="report.pdf", file_id="file", file_size=len(pdf)),
+                    caption="ringkaskan pdf", reply_text=AsyncMock()))
+        ctx = SimpleNamespace(bot=bot)
+        blocked = make_update(999)
+        await ns["handle_document"](blocked, ctx)
+        bot.get_file.assert_not_awaited()
+        allowed = make_update(321)
+        await ns["handle_document"](allowed, ctx)
+        primary.assert_awaited_once()
+        summarize.assert_awaited_once()
+        self.assertIn("Ringkasan teks PDF",
+                      allowed.effective_message.reply_text.await_args.args[0])
+
+
+
 if __name__ == "__main__":
     unittest.main()
