@@ -129,6 +129,46 @@ jobs:
                                 urlsplit(url).path[:130],flush=True)
           asyncio.run(main())
           PY
+      - name: Probe independent free documented discovery endpoints
+        run: |
+          python - <<'PY'
+          import asyncio, httpx
+          from urllib.parse import urlsplit
+          from free_research import parse_rss
+          probes = [
+            ("bing_news", "https://www.bing.com/news/search", {"q":"satellite LEO GEO maritime offshore connectivity","format":"rss"}),
+            ("google_news", "https://news.google.com/rss/search", {"q":"LEO GEO satellite maritime broadband","hl":"en-US","gl":"US","ceid":"US:en"}),
+            ("gdelt_doc", "https://api.gdeltproject.org/api/v2/doc/doc", {"query":"satellite maritime","mode":"ArtList","format":"json","maxrecords":"10"}),
+            ("wikipedia_search", "https://en.wikipedia.org/w/api.php", {"action":"query","list":"search","srsearch":"satellite internet low earth orbit geostationary","srlimit":"8","format":"json"}),
+            ("wikipedia_extlinks", "https://en.wikipedia.org/w/api.php", {"action":"query","generator":"search","gsrsearch":"satellite internet constellation","gsrlimit":"3","prop":"extlinks","ellimit":"30","format":"json"}),
+            ("crossref", "https://api.crossref.org/works", {"query":"LEO GEO satellite maritime communications","rows":"5"}),
+          ]
+          async def run(tag,url,params):
+            try:
+              async with httpx.AsyncClient(timeout=10,follow_redirects=False,headers={"User-Agent":"ChaL79Bot/1.4 public research probe"}) as c:
+                r=await c.get(url,params=params)
+              ct=r.headers.get("content-type","")
+              print("FREE_PROBE",tag,r.status_code,ct[:60],len(r.content),flush=True)
+              if "rss" in ct or "xml" in ct:
+                found=parse_rss(r.content,tag,10)
+                for v in found[:6]:print("FREE_RSS",tag,urlsplit(v["url"]).hostname,v["title"][:85],flush=True)
+              elif "json" in ct:
+                data=r.json()
+                if tag=="gdelt_doc":
+                  for v in data.get("articles",[])[:8]:print("FREE_GDELT",urlsplit(v.get("url","")).hostname,v.get("title","")[:85],flush=True)
+                elif tag=="wikipedia_search":
+                  for v in data.get("query",{}).get("search",[])[:8]:print("FREE_WIKI",v.get("title",""),flush=True)
+                elif tag=="wikipedia_extlinks":
+                  for v in data.get("query",{}).get("pages",{}).values():
+                    urls=[x.get("*","") for x in v.get("extlinks",[])]
+                    print("FREE_WIKI_EXT",v.get("title",""),len(urls),[urlsplit(u).hostname for u in urls[:12]],flush=True)
+              else:
+                print("FREE_BODY",tag,repr(r.text[:120]),flush=True)
+            except Exception as e:
+              print("FREE_ERROR",tag,type(e).__name__,str(e)[:100],flush=True)
+          async def main():await asyncio.gather(*(run(*p) for p in probes))
+          asyncio.run(main())
+          PY
       - name: Require two independent topical verified page excerpts
         env:
           ENABLE_GENERAL_PUBLIC_READER: '1'
