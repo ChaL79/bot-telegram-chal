@@ -7,11 +7,15 @@ locally for the normal Groq text route. User content is UNTRUSTED data.
 import asyncio
 import base64
 import io
+import logging
 import re
 import zipfile
 import xml.etree.ElementTree as ET
 
 import httpx
+
+log = logging.getLogger("media_tools")
+PDF_TRANSPORT_FAILURE = "Analisis PDF gagal atau tamat masa. Cuba fail lebih kecil."
 
 MAX_IMAGE_BYTES = 4_000_000
 MAX_DOCUMENT_BYTES = 3_000_000
@@ -194,7 +198,7 @@ def extract_pdf_text(data: bytes) -> str:
 
 def should_fallback_pdf(result: str) -> bool:
     """Permit local text fallback only for transient server errors, not quota."""
-    return any(
+    return result == PDF_TRANSPORT_FAILURE or any(
         result == f"PDF belum berjaya dianalisis (Gemini HTTP {code})."
         for code in PDF_RETRY_STATUS
     )
@@ -228,8 +232,11 @@ async def analyze_pdf(data: bytes, question: str, key: str, model: str, *, clien
                     url,
                     headers={"x-goog-api-key": key, "Content-Type": "application/json"},
                     json=payload, timeout=httpx.Timeout(18.0, connect=5.0))
-            except (httpx.HTTPError, ValueError):
-                return "Analisis PDF gagal atau tamat masa. Cuba fail lebih kecil."
+            except (httpx.TimeoutException, httpx.RequestError) as exc:
+                # No document data, API keys, filenames or URL query in logs.
+                log.warning("Gemini PDF transport failure: kind=%s",
+                            type(exc).__name__)
+                return PDF_TRANSPORT_FAILURE
             if r.status_code in PDF_RETRY_STATUS and attempt == 0:
                 # One bounded retry, with backoff. Never retry quota (429).
                 await asyncio.sleep(0.8)
