@@ -1,5 +1,6 @@
 import os
 import asyncio
+import io
 import random
 import uuid
 import logging
@@ -15,6 +16,9 @@ from gemini_extension import get_gemini_reply_result, MODEL_DEFAULT, is_authoriz
 from gemini_memory import read_history, record_exchange, clear_history
 from gemini_advanced import quota_reserve, run_advanced, split_telegram_text, MAX_INPUT_CHARS
 from voice_files import cleanup_voice_tempfiles
+from tts_service import (synthesize_malay_speech, speech_enabled,
+                         VOICE_CHOICES, DEFAULT_VOICE, VOICE_MODES,
+                         MODE_AUTO, MODE_ALL, MODE_OFF)
 from document_review import DOCUMENT_REVIEW_PROMPT
 from media_tools import (analyze_image, analyze_pdf, extract_document_text,
                          extract_pdf_text, should_fallback_pdf,
@@ -209,7 +213,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.effective_message.reply_text(
         "ChaL79Bot — Fungsi Peribadi:\n"
         "• Chat biasa: hantar soalan teks\n"
-        "• Voice note: hantar rakaman, saya jawab dalam teks\n"
+        "• Voice note: hantar rakaman, saya jawab dalam teks + suara\n"
+        "• /voice auto|all|off — kawal bila bot bercakap\n"
+        "• /voice lelaki|wanita — pilihan suara Bahasa Melayu\n"
+        "• /speak TEKS — dengar teks sebagai voice note\n"
         "• Gambar: hantar foto + caption soalan (hingga 4 MB)\n"
         "• Dokumen: PDF, DOCX, XLSX, TXT, MD, CSV (hingga 3 MB)\n"
         "• /gemini SOALAN — sembang dengan memori sementara\n"
@@ -440,6 +447,82 @@ async def personal_memory_command(update: Update, context: ContextTypes.DEFAULT_
             return
         await msg.reply_text(reply)
 
+
+async def send_spoken_reply(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                            answer: str, *, is_voice_note: bool = False,
+                            force: bool = False) -> bool:
+    """Owner-only voice, after text was already sent; never block plain replies."""
+    if not is_private_owner_update(update):
+        return False
+    state = getattr(context, "chat_data", None) or {}
+    mode = state.get("_tts_mode", MODE_AUTO)
+    if not force and not speech_enabled(mode, is_voice_note=is_voice_note):
+        return False
+    voice = state.get("_tts_voice", DEFAULT_VOICE)
+    try:
+        audio = await synthesize_malay_speech(answer, voice=voice)
+        upload = io.BytesIO(audio)
+        upload.name = "chal_reply.mp3"
+        await asyncio.wait_for(
+            context.bot.send_voice(chat_id=update.effective_chat.id, voice=upload),
+            timeout=18,
+        )
+        return True
+    except Exception as exc:
+        # Never log user text or audio; failure must not impact the text reply.
+        log.warning("Voice synthesis/send unavailable kind=%s", type(exc).__name__)
+        return False
+
+
+async def voice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Private control for temporary TTS preferences; no service or costs added."""
+    msg = update.effective_message
+    if not msg or not is_private_owner_update(update):
+        return
+    options = [str(v).strip().casefold() for v in (context.args or [])]
+    state = context.chat_data
+    if not options:
+        mode = state.get("_tts_mode", MODE_AUTO)
+        voice = state.get("_tts_voice", DEFAULT_VOICE)
+        label = "lelaki" if voice == VOICE_CHOICES["lelaki"] else "wanita"
+        await msg.reply_text(
+            "Tetapan suara: " + mode + " / " + label + ".\n"
+            "/voice auto — audio untuk voice note sahaja.\n"
+            "/voice all — audio untuk voice note DAN chat biasa.\n"
+            "/voice off — teks sahaja.\n"
+            "/voice lelaki atau /voice wanita — pilih suara.\n"
+            "/speak TEKS — bacakan satu teks terus, tanpa AI."
+        )
+        return
+    setting = options[0]
+    if setting in VOICE_MODES:
+        state["_tts_mode"] = setting
+        message = ("Tetapan suara: " + setting +
+                   ". Tetapan sementara ini kembali ke auto selepas restart Render.")
+    elif setting in VOICE_CHOICES:
+        state["_tts_voice"] = VOICE_CHOICES[setting]
+        message = "Suara ditetapkan kepada " + setting + "."
+    else:
+        message = "Pilihan: /voice auto, /voice all, /voice off, /voice lelaki, /voice wanita."
+    await msg.reply_text(message)
+
+
+async def speak_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Read explicitly provided text, no Groq call, no persistent recording."""
+    msg = update.effective_message
+    if not msg or not is_private_owner_update(update):
+        return
+    phrase = " ".join(context.args or []).strip()
+    if not phrase:
+        await msg.reply_text("Gunakan /speak diikuti teks Bahasa Melayu yang ingin didengar.")
+        return
+    if len(phrase) > 950:
+        await msg.reply_text("Teks terlalu panjang. Had /speak ialah 950 aksara.")
+        return
+    ok = await send_spoken_reply(update, context, phrase, force=True)
+    if not ok:
+        await msg.reply_text("Suara tidak tersedia sekarang. Cuba lagi atau guna teks biasa.")
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
     if not msg or not msg.text or not is_private_owner_update(update):
@@ -470,6 +553,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         log.exception("Unhandled error semasa ask_ai")
         reply = FINAL_ERROR_MESSAGE
     await msg.reply_text(reply[:4000])
+    await send_spoken_reply(update, context, reply, is_voice_note=False)
 
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -515,6 +599,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply = FINAL_ERROR_MESSAGE
 
         await msg.reply_text(reply[:4000])
+        await send_spoken_reply(update, context, reply, is_voice_note=True)
     finally:
         cleanup_voice_tempfiles(ogg_path, wav_path)
 
@@ -632,6 +717,8 @@ def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("myid", myid))
     application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("voice", voice_command))
+    application.add_handler(CommandHandler("speak", speak_command))
     for memory_command in ("remember", "memories", "forget", "clearmemory"):
         application.add_handler(CommandHandler(memory_command, personal_memory_command))
     application.add_handler(CommandHandler("gemini", gemini_command))
