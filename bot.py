@@ -11,6 +11,7 @@ import xml.etree.ElementTree as ET
 import httpx
 from pydub import AudioSegment
 from telegram import Update
+from telegram.error import NetworkError
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from gemini_extension import get_gemini_reply_result, MODEL_DEFAULT, is_authorized_owner
 from gemini_memory import read_history, record_exchange, clear_history
@@ -529,7 +530,8 @@ async def speak_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.reply_text("Suara tidak tersedia sekarang. Cuba lagi atau guna teks biasa.")
 
 async def reply_with_context(context: ContextTypes.DEFAULT_TYPE,
-                             chat_id: int, question: str) -> str:
+                             chat_id: int, question: str,
+                             *, is_voice_note: bool = False) -> str:
     """One locked conversation for both voice notes and typed messages.
 
     The model gets only bounded RAM history; failed calls do not enter history.
@@ -540,7 +542,10 @@ async def reply_with_context(context: ContextTypes.DEFAULT_TYPE,
     async with lock:
         notes = await read_user_notes(context, chat_id)
         history = read_conversation(state)
-        messages = build_chat_messages(question, notes, history, notes_as_instruction)
+        messages = build_chat_messages(
+            question, notes, history, notes_as_instruction,
+            is_voice_note=is_voice_note,
+        )
         try:
             response = await asyncio.wait_for(ask_ai(messages), timeout=55)
         except asyncio.TimeoutError:
@@ -591,6 +596,30 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send_spoken_reply(update, context, reply, is_voice_note=False)
 
 
+async def fetch_voice_file_with_retry(bot, file_id: str, ogg_path: str) -> None:
+    """Download once, retry only transient Telegram network/timeout failures.
+
+    Never re-transcribe or call Groq twice, and do not log file IDs, paths,
+    token-bearing URLs or the user's voice data. Every call is time bounded.
+    """
+    for attempt in range(2):
+        try:
+            remote = await asyncio.wait_for(bot.get_file(file_id), timeout=17)
+            await asyncio.wait_for(
+                remote.download_to_drive(ogg_path), timeout=22
+            )
+            return
+        except (NetworkError, asyncio.TimeoutError) as exc:
+            log.warning(
+                "Transient Telegram voice download failure attempt=%d kind=%s",
+                attempt + 1, type(exc).__name__,
+            )
+            if attempt:
+                raise
+            # Retries are only for idempotent file retrieval, not model calls.
+            await asyncio.sleep(0.7)
+
+
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
     if not msg or not msg.voice or not is_private_owner_update(update):
@@ -606,10 +635,17 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Never log a voice transcript or a user-linked temporary file path.
     try:
         try:
-            file = await context.bot.get_file(msg.voice.file_id)
-            await file.download_to_drive(ogg_path)
+            await fetch_voice_file_with_retry(
+                context.bot, msg.voice.file_id, ogg_path
+            )
             audio = AudioSegment.from_file(ogg_path, format="ogg")
             audio.export(wav_path, format="wav")
+        except (NetworkError, asyncio.TimeoutError):
+            await msg.reply_text(
+                "Sambungan Telegram untuk voice note terganggu. "
+                "Saya sudah cuba semula sekali; hantar voice note itu lagi ya."
+            )
+            return
         except Exception:
             log.exception("Gagal muat turun atau tukar format audio")
             await msg.reply_text("Maaf, saya tidak dapat memproses fail audio ini.")
@@ -620,7 +656,10 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.reply_text("Maaf, saya tidak dapat memahami voice note ini. Cuba lagi.")
             return
 
-        reply = await reply_with_context(context, update.effective_chat.id, transcript)
+        reply = await reply_with_context(
+            context, update.effective_chat.id, transcript,
+            is_voice_note=True,
+        )
         await msg.reply_text(reply[:4000])
         if valid_ai_response(reply, FINAL_ERROR_MESSAGE):
             await send_spoken_reply(update, context, reply, is_voice_note=True)
