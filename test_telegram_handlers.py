@@ -170,6 +170,7 @@ class MemoryCommandGuidanceTests(unittest.IsolatedAsyncioTestCase):
             "notes_as_instruction": lambda notes: "",
             "SYSTEM_PROMPT": "You are helpful",
             "FINAL_ERROR_MESSAGE": "fail",
+            "send_spoken_reply": AsyncMock(return_value=True),
         })
         msg = SimpleNamespace(
             text="Hantar /remember Saya suka muzik rock klasik",

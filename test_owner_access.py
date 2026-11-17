@@ -35,6 +35,7 @@ def handlers_under_test():
         "ask_ai": AsyncMock(return_value="Authorized answer"),
         "read_user_notes": AsyncMock(return_value=[]),
         "notes_as_instruction": lambda notes: "",
+        "send_spoken_reply": AsyncMock(return_value=True),
     }
     exec(compile(ast.Module(body=selected, type_ignores=[]),
                  filename="bot.py", mode="exec"), namespace)
