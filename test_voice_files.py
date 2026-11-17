@@ -1,5 +1,6 @@
 """Regression checks for privacy-sensitive Telegram voice-note handling."""
 import ast
+import asyncio
 from pathlib import Path
 import tempfile
 import unittest
