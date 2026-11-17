@@ -160,6 +160,20 @@ MALAY_RESEARCH_TERMS = {
     "pendaman": "latency",
     "peralihan": "handover",
     "kestabilan": "reliability",
+    # Broad Malay -> English concepts for general-interest research.
+    "pendidikan": "education", "sekolah": "school", "universiti": "university",
+    "ekonomi": "economy", "perniagaan": "business", "harga": "price",
+    "pasaran": "market", "pekerjaan": "employment", "gaji": "salary",
+    "pelancongan": "tourism", "sejarah": "history",
+    "budaya": "culture", "agama": "religion", "islam": "islam",
+    "teknologi": "technology", "komputer": "computer",
+    "kesan": "effects", "faedah": "benefits", "kebaikan": "benefits",
+    "keburukan": "risks", "masalah": "problems", "punca": "causes",
+    "makanan": "food", "pemakanan": "nutrition", "senaman": "exercise",
+    "persekitaran": "environment", "pencemaran": "pollution",
+    "tenaga": "energy", "elektrik": "electricity", "kos": "cost",
+    "telefon": "phone", "pembelajaran": "learning",
+    "alam": "nature", "semula": "natural",
 }
 
 def _terms(value: str) -> list[str]:
@@ -509,8 +523,8 @@ def parse_bing_news_rss(raw: bytes, *, limit: int = 8) -> list[dict]:
     return found
 
 
-def parse_wikipedia(data: dict, limit: int = 3) -> list[dict]:
-    if not isinstance(data, dict):
+def parse_wikipedia(data: dict, limit: int = 3, *, language: str = "en") -> list[dict]:
+    if language not in ("en", "ms") or not isinstance(data, dict):
         return []
     query = data.get("query", {})
     hits = query.get("search", []) if isinstance(query, dict) else []
@@ -521,9 +535,9 @@ def parse_wikipedia(data: dict, limit: int = 3) -> list[dict]:
         title = clean(hit.get("title", ""), 110)
         if not title:
             continue
-        url = "https://en.wikipedia.org/wiki/" + quote(title.replace(" ", "_"), safe="()_-")
+        url = f"https://{language}.wikipedia.org/wiki/" + quote(title.replace(" ", "_"), safe="()_-")
         if allowed_source_url(url):
-            result.append({"provider": "Wikipedia", "title": title, "url": url,
+            result.append({"provider": f"Wikipedia ({language})", "title": title, "url": url,
                            "snippet": clean(hit.get("snippet", ""), 300),
                            "published": ""})
         if len(result) == limit:
@@ -840,6 +854,22 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
             log.info("Wikipedia API parsed %d results", len(items))
             return items
 
+        async def get_wikipedia_malay():
+            # Community encyclopedia search: metadata only, never treat a
+            # Wikipedia search snippet as verified article contents.
+            short = " ".join(_terms(query_text)[:7])[:110]
+            if not short:
+                return []
+            resp = await session.get(
+                "https://ms.wikipedia.org/w/api.php",
+                params={"action": "query", "list": "search", "srsearch": short,
+                        "srlimit": "4", "format": "json"},
+                timeout=7.0,
+            )
+            if resp.status_code != 200 or len(resp.content) > MAX_BYTES:
+                return []
+            return parse_wikipedia(resp.json(), 4, language="ms")
+
         async def get_news():
             resp = await session.get(
                 "https://news.google.com/rss/search",
@@ -890,7 +920,8 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
             log.info("Hacker News API parsed %d metadata results", len(items))
             return items
 
-        providers = [get_bing(), get_bing_short(), get_wikipedia(), get_news()]
+        providers = [get_bing(), get_bing_short(), get_wikipedia(),
+                     get_wikipedia_malay(), get_news()]
         if len(named_product_orgs) >= 1:
             providers.extend(get_product_site(org) for org in named_product_orgs)
             providers.extend(get_product_sitemap(org) for org in named_product_orgs
@@ -935,7 +966,8 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
         # Invoke the independent news RSS index only when primary providers
         # failed to discover two different directly-readable publisher hosts.
         # Metadata wrappers and encyclopedias are not counted as evidence here.
-        weak_hosts = {"news.google.com", "en.wikipedia.org", "en.m.wikipedia.org"}
+        weak_hosts = {"news.google.com", "en.wikipedia.org",
+                      "en.m.wikipedia.org", "ms.wikipedia.org"}
         genuine_hosts = {
             urlsplit(item["url"]).hostname for _, item in ranked
             if safe_public_article_url(item["url"])
