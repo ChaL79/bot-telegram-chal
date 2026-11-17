@@ -159,5 +159,32 @@ class MediaHandlerTests(unittest.IsolatedAsyncioTestCase):
             "Ringkasan: contoh dokumen.")
 
 
+class MemoryCommandGuidanceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_instruction_prefix_is_not_saved_as_note_and_shows_exact_syntax(self):
+        import re
+        ns = extract_handlers("handle_message", extras={
+            "re": re,
+            "ask_ai": AsyncMock(return_value="regular model reply"),
+            "read_user_notes": AsyncMock(return_value=[]),
+            "notes_as_instruction": lambda notes: "",
+            "SYSTEM_PROMPT": "You are helpful",
+            "FINAL_ERROR_MESSAGE": "fail",
+        })
+        msg = SimpleNamespace(
+            text="Hantar /remember Saya suka muzik rock klasik",
+            reply_text=AsyncMock())
+        update = SimpleNamespace(
+            effective_user=SimpleNamespace(id=321),
+            effective_chat=SimpleNamespace(id=321, type="private"),
+            effective_message=msg)
+        ctx = SimpleNamespace(
+            bot=SimpleNamespace(send_chat_action=AsyncMock()))
+        await ns["handle_message"](update, ctx)
+        msg.reply_text.assert_awaited_once()
+        self.assertIn("mesti BERMULA dengan /remember", msg.reply_text.await_args.args[0])
+        ns["ask_ai"].assert_not_awaited()
+        ctx.bot.send_chat_action.assert_not_awaited()
+
+
 if __name__ == "__main__":
     unittest.main()
