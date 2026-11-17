@@ -57,7 +57,10 @@ class FreeResearchTests(unittest.IsolatedAsyncioTestCase):
             raise AssertionError("Unapproved host")
         async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as client:
             sources = await public_source_search("Cari sumber tentang Python asyncio rate limiting. Ringkaskan dapatan.", client=client)
-        self.assertEqual(len(calls), 5)
+        # One extra no-key Bing News discovery call is allowed when publishers
+        # are missing; it must not change verified-document semantics.
+        self.assertEqual(len(calls), 6)
+        self.assertTrue(any("/news/search" in url for url in calls))
         self.assertEqual(len(sources), 2)
         self.assertTrue(any("docs.python.org" in source["url"] for source in sources))
         self.assertIn("q=python%20asyncio%20rate%20limiting", calls[0].lower())
