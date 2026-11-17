@@ -1,6 +1,7 @@
 import os
 import asyncio
 import random
+import uuid
 import logging
 import httpx
 from pydub import AudioSegment
@@ -9,6 +10,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 from gemini_extension import get_gemini_reply_result, MODEL_DEFAULT, is_authorized_owner
 from gemini_memory import read_history, record_exchange, clear_history
 from gemini_advanced import quota_reserve, run_advanced, split_telegram_text, MAX_INPUT_CHARS
+from voice_files import cleanup_voice_tempfiles
 
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL")
@@ -330,41 +332,44 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    # Per-request random names prevent concurrent requests sharing an audio path.
+    nonce = uuid.uuid4().hex
+    ogg_path = f"/tmp/chal_voice_{nonce}.oga"
+    wav_path = f"/tmp/chal_voice_{nonce}.wav"
 
-    ogg_path = f"/tmp/{msg.voice.file_unique_id}.oga"
-    wav_path = f"/tmp/{msg.voice.file_unique_id}.wav"
-
+    # Remove audio artifacts on success, failure, and early return.
+    # Never log a voice transcript or a user-linked temporary file path.
     try:
-        file = await context.bot.get_file(msg.voice.file_id)
-        await file.download_to_drive(ogg_path)
+        try:
+            file = await context.bot.get_file(msg.voice.file_id)
+            await file.download_to_drive(ogg_path)
+            audio = AudioSegment.from_file(ogg_path, format="ogg")
+            audio.export(wav_path, format="wav")
+        except Exception:
+            log.exception("Gagal muat turun atau tukar format audio")
+            await msg.reply_text("Maaf, saya tidak dapat memproses fail audio ini.")
+            return
 
-        audio = AudioSegment.from_file(ogg_path, format="ogg")
-        audio.export(wav_path, format="wav")
-    except Exception:
-        log.exception("Gagal muat turun atau tukar format audio")
-        await msg.reply_text("Maaf, saya tidak dapat memproses fail audio ini.")
-        return
+        transcript = await transcribe_voice(wav_path)
+        if not transcript:
+            await msg.reply_text("Maaf, saya tidak dapat memahami voice note ini. Cuba lagi.")
+            return
 
-    transcript = await transcribe_voice(wav_path)
-    if not transcript:
-        await msg.reply_text("Maaf, saya tidak dapat memahami voice note ini. Cuba lagi.")
-        return
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": transcript},
+        ]
+        try:
+            reply = await asyncio.wait_for(ask_ai(messages), timeout=55)
+        except asyncio.TimeoutError:
+            reply = "Maaf, respons mengambil masa terlalu lama. Cuba lagi sebentar ya."
+        except Exception:
+            log.exception("Ralat semasa ask_ai (voice)")
+            reply = FINAL_ERROR_MESSAGE
 
-    log.info("Transkrip: %s", transcript[:100])
-
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": transcript},
-    ]
-    try:
-        reply = await asyncio.wait_for(ask_ai(messages), timeout=55)
-    except asyncio.TimeoutError:
-        reply = "Maaf, respons mengambil masa terlalu lama. Cuba lagi sebentar ya."
-    except Exception:
-        log.exception("Ralat semasa ask_ai (voice)")
-        reply = FINAL_ERROR_MESSAGE
-
-    await msg.reply_text(reply[:4000])
+        await msg.reply_text(reply[:4000])
+    finally:
+        cleanup_voice_tempfiles(ogg_path, wav_path)
 
 
 def main():
