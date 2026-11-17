@@ -26,6 +26,7 @@ def extract_handlers(*names, extras=None):
         "PurePath": PurePath,
         "SYSTEM_PROMPT": "Test assistant",
         "MAX_NOTES": MAX_NOTES,
+        "DOCUMENT_REVIEW_PROMPT": __import__("document_review").DOCUMENT_REVIEW_PROMPT,
         "MAX_IMAGE_BYTES": MAX_IMAGE_BYTES,
         "MAX_DOCUMENT_BYTES": MAX_DOCUMENT_BYTES,
         "ALLOWED_DOCUMENT_EXTENSIONS": ALLOWED_DOCUMENT_EXTENSIONS,
