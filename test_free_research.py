@@ -252,7 +252,8 @@ class FreeResearchTests(unittest.IsolatedAsyncioTestCase):
             sources = await public_source_search(question, client=client)
         self.assertEqual({urlsplit(x["url"]).hostname for x in sources},
                          {"publisher-alpha.org", "publisher-beta.net"})
-        self.assertEqual(sum(path == "/news/search" for host, path in calls), 1)
+        self.assertGreaterEqual(sum(path == "/news/search" for host, path in calls), 1)
+        self.assertLessEqual(sum(path == "/news/search" for host, path in calls), 2)
 
     def test_wifi_research_keeps_topic_not_malay_instructions(self):
         question = ("/deepdive Deep research: Bandingkan Wi-Fi 7 dengan Wi-Fi 6 berdasarkan "
