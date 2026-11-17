@@ -10,7 +10,7 @@ import ipaddress
 import json
 import logging
 import re
-from urllib.parse import quote, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 from xml.etree import ElementTree
 
 import httpx
@@ -148,6 +148,18 @@ MALAY_RESEARCH_TERMS = {
     "kemalangan": "accidents",
     "kecederaan": "injuries",
     "kesihatan": "health",
+    # Cross-domain maritime and satellite concepts: vocabulary only, no vendor URLs.
+    "satelit": "satellite",
+    "satelitnya": "satellite",
+    "kapal": "maritime",
+    "laut": "maritime",
+    "kelajuan": "speed",
+    "liputan": "coverage",
+    "cuaca": "weather",
+    "hujan": "rain",
+    "pendaman": "latency",
+    "peralihan": "handover",
+    "kestabilan": "reliability",
 }
 
 def _terms(value: str) -> list[str]:
@@ -182,6 +194,9 @@ TOPIC_ANCHORS = frozenset({
     "wifi7", "wifi6", "wifi", "mlo", "6ghz", "latency", "multilink",
     # Occupational safety: keep the subject, not Malay task scaffolding, first.
     "fatigue", "shift", "work", "sleep", "cdc", "niosh", "hse",
+    # Orbit terminology must outrank generic latency/speed in comparison queries.
+    "leo", "geo", "satellite", "maritime", "vsat",
+    "handover", "orbit", "geostationary", "constellation",
 })
 IDENTITY_ANCHORS = frozenset({
     "passkeys", "passkey", "fido2", "totp", "mfa", "otp", "phishing",
@@ -233,6 +248,10 @@ def _canonical(term: str) -> str:
         return "request"
     if term in ("thread", "threads", "threading"):
         return "thread"
+    if term in ("satellite", "satellites"):
+        return "satellite"
+    if term in ("handover", "handovers", "handoff", "handoffs"):
+        return "handover"
     return term
 
 
@@ -307,6 +326,20 @@ def source_relevance(item: dict, query_terms: list[str]) -> int:
     )}
     sought = [_canonical(x) for x in query_terms]
     matched = set(sought) & (title_terms | content_terms)
+    # Require the defining subject, not incidental performance terminology.
+    # A page about generic network latency cannot establish LEO/GEO evidence.
+    # This is a topic-based rule; no vendor, hostname or article URL is preferred.
+    if ({"leo", "geo"} & set(sought)) and "satellite" in sought:
+        present = title_terms | content_terms
+        orbit_context = {"satellite", "orbit", "orbital", "maritime",
+                         "vsat", "geostationary", "constellation"}
+        applied_context = {"geo", "geostationary", "orbit", "orbital", "maritime",
+                           "offshore", "vessel", "ship", "handover",
+                           "coverage", "rain", "weather", "broadband"}
+        if (not (present & {"leo", "geo"})
+                or not (present & orbit_context)
+                or not (present & applied_context)):
+            return 0
     # A Gemini API privacy query must not be satisfied by generic Google
     # search results or unrelated Gemini launches. Require privacy/data-use
     # context as well as a named developer/API subject in the result itself.
@@ -362,7 +395,16 @@ def source_relevance(item: dict, query_terms: list[str]) -> int:
     if len(sought) >= 3 and not (set(sought[:2]) & matched):
         return 0
     # Title matches are more relevant than incidental snippet/domain tokens.
-    return len(matched) + 2 * len(matched & title_terms)
+    score = len(matched) + 2 * len(matched & title_terms)
+    # Source-specific keywords from the user's request beat incidental matching:
+    # generic LEO/GEO press releases must not displace offshore/maritime evidence.
+    # This boosts the query SUBJECT (not publishers or static article URLs).
+    if "maritime" in sought and ({"leo", "geo"} & set(sought)):
+        if {"maritime", "offshore", "vessel", "ship", "ships"} & title_terms:
+            score += 8
+        elif {"maritime", "offshore", "vessel", "ship", "ships"} & content_terms:
+            score += 3
+    return score
 
 
 def clean(value: str, size: int = 280) -> str:
@@ -417,6 +459,54 @@ def parse_rss(raw: bytes, provider: str, limit: int = 4) -> list[dict]:
         if len(items) == limit:
             break
     return items
+
+
+def parse_bing_news_rss(raw: bytes, *, limit: int = 8) -> list[dict]:
+    """Extract actual publisher URLs from Bing News RSS metadata without following redirects.
+
+    Search providers can wrap a publisher URL inside a Bing /news/apiclick.aspx
+    link. Only extract the single encoded `url` parameter of that exact endpoint.
+    The extracted URL is still UNVERIFIED until the independent DNS-pinned HTML
+    reader fetches and extracts real relevant page content.
+    """
+    if len(raw) > MAX_BYTES or b"<!DOCTYPE" in raw.upper() or b"<!ENTITY" in raw.upper():
+        return []
+    try:
+        root = ElementTree.fromstring(raw)
+    except ElementTree.ParseError:
+        return []
+    found = []
+    used = set()
+    for item in root.findall("./channel/item")[:limit * 5]:
+        wrapper = (item.findtext("link") or "").strip()
+        try:
+            p = urlsplit(wrapper)
+            if (p.scheme not in ("http", "https")
+                    or p.hostname not in ("www.bing.com", "bing.com")
+                    or p.path.lower() != "/news/apiclick.aspx"
+                    or p.username or p.password or p.fragment):
+                continue
+            candidates = parse_qs(p.query, keep_blank_values=False).get("url", [])
+            if len(candidates) != 1:
+                continue
+            target = candidates[0]
+            if target in used or not safe_public_article_url(target):
+                continue
+        except (UnicodeError, ValueError):
+            continue
+        title = clean(item.findtext("title") or "", 115)
+        if not title:
+            continue
+        used.add(target)
+        found.append({
+            "provider": "Bing News RSS (publisher link; HTML not yet verified)",
+            "title": title, "url": target,
+            "snippet": clean(item.findtext("description") or "", 300),
+            "published": clean(item.findtext("pubDate") or "", 55),
+        })
+        if len(found) >= limit:
+            break
+    return found
 
 
 def parse_wikipedia(data: dict, limit: int = 3) -> list[dict]:
@@ -684,6 +774,47 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
                      org, len(result))
             return result[:4]
 
+        async def get_bing_news():
+            """Bounded universal news fallback; no vendor URLs or redirect fetches.
+
+            Search abbreviations are ambiguous (e.g. LEO -> zodiac). A second
+            reordered phrase is tried only if the first has too few strongly
+            topical publisher domains. This is generic query planning, not a
+            satellite-domain allowlist.
+            """
+            primary = " ".join(terms[:6])[:160]
+            acronyms = [t for t in terms if len(t) <= 3][:2]
+            subjects = [t for t in terms if len(t) > 3][:2]
+            alternative = " ".join(acronyms + subjects)[:160]
+            queries = [primary]
+            if acronyms and alternative and alternative != primary:
+                queries.append(alternative)
+            gathered = []
+            unique_urls = set()
+            for search_phrase in queries[:2]:
+                resp = await session.get(
+                    "https://www.bing.com/news/search",
+                    params={"q": search_phrase, "format": "rss"},
+                    timeout=7.0,
+                    follow_redirects=False,
+                )
+                if resp.status_code != 200:
+                    log.info("Bing News RSS unavailable HTTP %s", resp.status_code)
+                    continue
+                items = parse_bing_news_rss(resp.content, limit=12)
+                log.info("Bing News publisher links discovered %d", len(items))
+                for item in items:
+                    if item["url"] not in unique_urls:
+                        unique_urls.add(item["url"])
+                        gathered.append(item)
+                topical_hosts = {
+                    urlsplit(item["url"]).hostname for item in gathered
+                    if source_relevance(item, terms) > 0
+                }
+                if len(topical_hosts) >= 4:
+                    break
+            return gathered
+
         async def get_wikipedia():
             resp = await session.get(
                 "https://en.wikipedia.org/w/api.php",
@@ -790,12 +921,56 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
                     score = max(score, 6)
                 if score > 0:
                     ranked.append((score, item))
+        # Invoke the independent news RSS index only when primary providers
+        # failed to discover two different directly-readable publisher hosts.
+        # Metadata wrappers and encyclopedias are not counted as evidence here.
+        weak_hosts = {"news.google.com", "en.wikipedia.org", "en.m.wikipedia.org"}
+        genuine_hosts = {
+            urlsplit(item["url"]).hostname for _, item in ranked
+            if safe_public_article_url(item["url"])
+            and urlsplit(item["url"]).hostname not in weak_hosts
+        }
+        if len(genuine_hosts) < 2:
+            try:
+                news_hits = await get_bing_news()
+            except (httpx.HTTPError, ValueError, UnicodeError) as exc:
+                log.info("Bing News RSS discovery unavailable kind=%s",
+                         type(exc).__name__)
+                news_hits = []
+            for item in news_hits:
+                if item["url"] in urls:
+                    continue
+                urls.add(item["url"])
+                score = source_relevance(item, terms)
+                if score > 0:
+                    ranked.append((score, item))
+            log.info("Independent news discovery candidates=%d",
+                     sum(1 for _, ref in ranked
+                         if ref.get("provider", "").startswith("Bing News RSS")))
         ranked.sort(key=lambda pair: pair[0], reverse=True)
         # General open-web reading is limited to three network attempts: put
         # directly readable article-style URLs before tracking/news redirects.
         # Preserve institution-specific ranking for the curated protocols.
         if not organizations and not accessibility_orgs:
-            ranked = prioritize_readable_sources(ranked)
+            if "maritime" in terms and "satellite" in terms:
+                # Prefer evidence explicitly about the requested maritime
+                # context before generic press releases with deep URL paths.
+                ranked = sorted(
+                    ranked,
+                    key=lambda pair: (pair[0], readable_article_priority(pair[1])),
+                    reverse=True,
+                )
+                selected, repeats, hosts = [], [], set()
+                for pair in ranked:
+                    hostname = urlsplit(pair[1]["url"]).hostname
+                    if hostname in hosts:
+                        repeats.append(pair)
+                    else:
+                        hosts.add(hostname)
+                        selected.append(pair)
+                ranked = selected + repeats
+            else:
+                ranked = prioritize_readable_sources(ranked)
         # Preserve distinct official sources before generic indexing results.
         if len(named_product_orgs) >= 1:
             official, selected_urls = [], set()

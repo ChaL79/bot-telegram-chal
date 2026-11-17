@@ -1,0 +1,91 @@
+name: LEO GEO offshore live acceptance
+on:
+  pull_request:
+    paths:
+      - 'free_research.py'
+      - 'source_reader.py'
+      - 'gemini_advanced.py'
+      - 'test_free_research.py'
+      - 'test_source_reader.py'
+      - '.github/workflows/leo-geo-offshore-live.yml'
+permissions:
+  contents: read
+jobs:
+  satellite-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements.txt
+      - name: Verify independent real HTML evidence, source-bound quotations
+        env:
+          ENABLE_GENERAL_PUBLIC_READER: '1'
+        run: |
+          python - <<'PY'
+          import asyncio
+          import re
+          from urllib.parse import urlsplit
+          from free_research import public_source_search
+          from source_reader import enrich_with_read_excerpts
+          from gemini_advanced import verified_source_quotes
+
+          question = (
+              "Bandingkan internet satelit LEO dan GEO untuk kapal offshore, "
+              "termasuk latency, kelajuan, liputan, kesan cuaca dan handover. "
+              "Dapatkan petikan HTML sebenar daripada dua domain bebas."
+          )
+
+          def topical_excerpt(record):
+              excerpt = record.get("excerpt", "").casefold()
+              title = record.get("title", "").casefold()
+              has_orbit = bool(re.search(
+                  r"\b(?:leo|geo|geostationary|satellite|satelit|orbit|constellation)\b",
+                  excerpt))
+              has_marine = bool(re.search(
+                  r"\b(?:maritime|offshore|vessels?|ships?|connectivity|broadband|communications?)\b",
+                  excerpt + " " + title))
+              return has_orbit and has_marine
+
+          async def main():
+              discovered = await public_source_search(question)
+              print("DISCOVERED_COUNT", len(discovered), flush=True)
+              evidence = await enrich_with_read_excerpts(question, discovered)
+              verified = [item for item in evidence
+                          if item.get("read_status") == "verified_page_excerpt"
+                          and item.get("excerpt") and topical_excerpt(item)]
+              for item in evidence:
+                  print("EVIDENCE", item.get("read_status"),
+                        urlsplit(item.get("url", "")).hostname,
+                        item.get("title", "")[:80],
+                        "EXCERPT_CHARS", len(item.get("excerpt", "")),
+                        flush=True)
+              hosts = {urlsplit(item["url"]).hostname.removeprefix("www.")
+                       for item in verified}
+              print("TOPICAL_VERIFIED_HOSTS", sorted(hosts), flush=True)
+              assert len(hosts) >= 2, (
+                  "FAIL: fewer than 2 independent relevant publisher HTML "
+                  "excerpts. Never merge or deploy on this result.")
+
+              quotes = verified_source_quotes(evidence)
+              for number, item in enumerate(evidence[:8], 1):
+                  if item.get("read_status") != "verified_page_excerpt":
+                      continue
+                  excerpt_lines = [" ".join(line.split())
+                                   for line in item["excerpt"].splitlines()]
+                  source_line = next((line for line in excerpt_lines
+                                      if len(line.split()) >= 6), "")
+                  if not source_line:
+                      continue
+                  exact = " ".join(source_line.split()[:20])
+                  assert f'[{number}]' in quotes
+                  assert item["url"] in quotes
+                  assert f'Petikan disahkan: "{exact}"' in quotes, (
+                      "FAIL: source quote not copied verbatim from own excerpt")
+              print("SOURCE_QUOTES_BOUND", True, flush=True)
+          asyncio.run(main())
+          PY

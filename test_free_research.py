@@ -1,3 +1,4 @@
+from urllib.parse import urlsplit
 import unittest
 
 import httpx
@@ -5,7 +6,7 @@ import httpx
 from free_research import (
     allowed_source_url, parse_rss, parse_wikipedia, public_source_search,
     evidence_text, references_text, search_query_terms, source_relevance,
-    parse_stackexchange, parse_hackernews,
+    parse_stackexchange, parse_hackernews, parse_bing_news_rss,
 )
 
 
@@ -56,7 +57,10 @@ class FreeResearchTests(unittest.IsolatedAsyncioTestCase):
             raise AssertionError("Unapproved host")
         async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as client:
             sources = await public_source_search("Cari sumber tentang Python asyncio rate limiting. Ringkaskan dapatan.", client=client)
-        self.assertEqual(len(calls), 5)
+        # One extra no-key Bing News discovery call is allowed when publishers
+        # are missing; it must not change verified-document semantics.
+        self.assertEqual(len(calls), 6)
+        self.assertTrue(any("/news/search" in url for url in calls))
         self.assertEqual(len(sources), 2)
         self.assertTrue(any("docs.python.org" in source["url"] for source in sources))
         self.assertIn("q=python%20asyncio%20rate%20limiting", calls[0].lower())
@@ -144,6 +148,116 @@ class FreeResearchTests(unittest.IsolatedAsyncioTestCase):
                      "url":"https://example.org/press/offshore",
                      "snippet":"Company profile"}
         self.assertEqual(source_relevance(unrelated, terms), 0)
+
+    def test_leo_geo_malay_query_keeps_orbits_ahead_of_generic_latency(self):
+        q = ("/deepdive Bandingkan internet satelit LEO vs GEO untuk kapal offshore: "
+             "latency, kelajuan, liputan, cuaca, dan handover.")
+        terms = search_query_terms(q)
+        self.assertEqual(terms[:3], ["satellite", "leo", "geo"])
+        self.assertIn("offshore", terms)
+        self.assertIn("maritime", terms)
+        self.assertIn("speed", terms)
+        self.assertIn("coverage", terms)
+        self.assertIn("weather", terms)
+        generic = {"title": "What is latency? - IBM",
+                   "url": "https://www.ibm.com/think/topics/latency",
+                   "snippet": "Network latency and bandwidth measurements"}
+        self.assertEqual(source_relevance(generic, terms), 0)
+        relevant = [
+            {"title": "LEO GEO satellite broadband for maritime vessels",
+             "url": "https://orbitalpha.org/guides/leo-geo-satellite-maritime",
+             "snippet": "Compare offshore GEO LEO coverage and latency"},
+            {"title": "LEO satellite handover for offshore connectivity",
+             "url": "https://orbitbeta.net/articles/leo-satellite-handover",
+             "snippet": "Maritime broadband weather and vessel handover"},
+        ]
+        for item in relevant:
+            self.assertGreater(source_relevance(item, terms), 0)
+
+    async def test_leo_geo_discovery_rejects_generic_latency_and_keeps_domains(self):
+        q = ("Bandingkan internet satelit LEO dan GEO untuk kapal offshore, "
+             "latency, kelajuan, liputan, cuaca dan handover.")
+        rss = b"""<rss><channel>
+        <item><title>What is latency? - IBM</title>
+          <link>https://www.ibm.com/think/topics/latency</link>
+          <description>Network latency and bandwidth</description></item>
+        <item><title>LEO GEO satellite broadband for maritime vessels</title>
+          <link>https://orbitalpha.org/guides/leo-geo-satellite-maritime</link>
+          <description>GEO and LEO offshore coverage latency</description></item>
+        <item><title>LEO satellite handover for offshore connectivity</title>
+          <link>https://orbitbeta.net/articles/leo-satellite-handover</link>
+          <description>Maritime vessels weather and handover</description></item>
+        </channel></rss>"""
+        def mock(request):
+            if request.url.host == "www.bing.com":
+                return httpx.Response(200, content=rss)
+            if request.url.host == "en.wikipedia.org":
+                return httpx.Response(200, json={"query": {"search": []}})
+            return httpx.Response(503)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as client:
+            results = await public_source_search(q, client=client)
+        hosts = {urlsplit(r["url"]).hostname for r in results}
+        self.assertEqual(hosts, {"orbitalpha.org", "orbitbeta.net"})
+        self.assertNotIn("www.ibm.com", hosts)
+
+    def test_bing_news_publisher_link_extraction_is_strict_and_no_fetch(self):
+        from urllib.parse import quote
+        from xml.sax.saxutils import escape
+        good = "https://publisher-one.org/articles/satellite-leo-geo"
+        safe = "http://www.bing.com/news/apiclick.aspx?ref=FexRss&url=" + quote(good, safe="")
+        unsafe = [
+            "http://www.bing.com/news/apiclick.aspx?url=" + quote("http://127.0.0.1/admin", safe=""),
+            "http://www.bing.com/news/apiclick.aspx?url=" + quote("https://localhost/a", safe=""),
+            "http://evil.com/news/apiclick.aspx?url=" + quote(good, safe=""),
+            "http://www.bing.com/redirect?url=" + quote(good, safe=""),
+            "http://www.bing.com/news/apiclick.aspx?url=" + quote(good + "?tracking=1", safe=""),
+            "http://www.bing.com/news/apiclick.aspx?url=" + quote(good, safe="") +
+            "&url=" + quote("https://evil.org/article", safe=""),
+        ]
+        items = [(safe, "LEO GEO satellite maritime broadband")] + [
+            (u, "Untrusted") for u in unsafe]
+        xml = ("<rss><channel>" + "".join(
+            "<item><title>" + title + "</title><link>" + escape(url) +
+            "</link><description>LEO GEO satellite internet</description></item>"
+            for url, title in items) + "</channel></rss>").encode()
+        results = parse_bing_news_rss(xml)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["url"], good)
+        self.assertIn("not yet verified", results[0]["provider"])
+        self.assertEqual(parse_bing_news_rss(b"<!DOCTYPE rss><rss/>"), [])
+
+    async def test_news_fallback_recovers_independent_satellite_publishers(self):
+        from urllib.parse import quote
+        from xml.sax.saxutils import escape
+        articles = [
+            ("LEO GEO satellite for maritime vessels",
+             "https://publisher-alpha.org/insight/leo-geo-satellite"),
+            ("LEO satellite connectivity for offshore ships",
+             "https://publisher-beta.net/research/leo-satellite-maritime"),
+        ]
+        rss = ("<rss><channel>" + "".join(
+            "<item><title>" + title + "</title><link>" +
+            escape("http://www.bing.com/news/apiclick.aspx?url=" +
+                   quote(url, safe="")) +
+            "</link><description>Satellite LEO GEO offshore coverage handover</description></item>"
+            for title, url in articles) + "</channel></rss>").encode()
+        calls = []
+        def mock(req):
+            calls.append((req.url.host, req.url.path))
+            if req.url.host == "www.bing.com" and req.url.path == "/news/search":
+                return httpx.Response(200, content=rss)
+            if req.url.host == "www.bing.com":
+                return httpx.Response(200, content=b"<rss><channel/></rss>")
+            if req.url.host == "en.wikipedia.org":
+                return httpx.Response(200, json={"query":{"search":[]}})
+            return httpx.Response(503)
+        question = "Bandingkan internet satelit LEO GEO kapal offshore latency cuaca handover"
+        async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as client:
+            sources = await public_source_search(question, client=client)
+        self.assertEqual({urlsplit(x["url"]).hostname for x in sources},
+                         {"publisher-alpha.org", "publisher-beta.net"})
+        self.assertGreaterEqual(sum(path == "/news/search" for host, path in calls), 1)
+        self.assertLessEqual(sum(path == "/news/search" for host, path in calls), 2)
 
     def test_wifi_research_keeps_topic_not_malay_instructions(self):
         question = ("/deepdive Deep research: Bandingkan Wi-Fi 7 dengan Wi-Fi 6 berdasarkan "
