@@ -195,7 +195,7 @@ TOPIC_ANCHORS = frozenset({
     # Occupational safety: keep the subject, not Malay task scaffolding, first.
     "fatigue", "shift", "work", "sleep", "cdc", "niosh", "hse",
     # Orbit terminology must outrank generic latency/speed in comparison queries.
-    "leo", "geo", "satellite", "maritime", "offshore", "vsat",
+    "leo", "geo", "satellite", "maritime", "vsat",
     "handover", "orbit", "geostationary", "constellation",
 })
 IDENTITY_ANCHORS = frozenset({
