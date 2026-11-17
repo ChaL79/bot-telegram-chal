@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 
 from natural_chat import (
     HISTORY_KEY, MAX_EXCHANGES, IDLE_TTL_SECONDS, NATURAL_CHAT_PROMPT,
+    VOICE_TURN_GUIDANCE,
     read_conversation, record_conversation, clear_conversation,
     build_chat_messages, valid_ai_response,
 )
@@ -30,6 +31,16 @@ class NaturalContextTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(read_conversation(state, now=122)), 2*MAX_EXCHANGES)
         self.assertEqual(read_conversation(state, now=125+IDLE_TTL_SECONDS), [])
         self.assertNotIn(HISTORY_KEY, state)
+
+    def test_voice_guidance_is_spoken_natural_without_changing_text_mode(self):
+        text = build_chat_messages("Awak ingat hobi tadi?", [], [], lambda notes: "")
+        voice = build_chat_messages(
+            "Awak ingat hobi tadi?", [], [], lambda notes: "", is_voice_note=True,
+        )
+        self.assertNotIn("INI PERBUALAN SUARA", text[0]["content"])
+        self.assertIn("INI PERBUALAN SUARA", voice[0]["content"])
+        self.assertIn("1 hingga 3 ayat", VOICE_TURN_GUIDANCE)
+        self.assertIn("Anda menyebutkan bahawa", NATURAL_CHAT_PROMPT)
 
     def test_failed_responses_and_bad_history_never_reused(self):
         state = {}
