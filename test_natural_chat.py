@@ -40,6 +40,7 @@ class NaturalContextTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("INI PERBUALAN SUARA", text[0]["content"])
         self.assertIn("INI PERBUALAN SUARA", voice[0]["content"])
         self.assertIn("1 hingga 3 ayat", VOICE_TURN_GUIDANCE)
+        self.assertIn("tujuh puluhan dan lapan puluhan", VOICE_TURN_GUIDANCE)
         self.assertIn("Anda menyebutkan bahawa", NATURAL_CHAT_PROMPT)
 
     def test_failed_responses_and_bad_history_never_reused(self):
