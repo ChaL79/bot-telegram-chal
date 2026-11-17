@@ -1,3 +1,4 @@
+from urllib.parse import urlsplit
 import unittest
 
 import httpx
@@ -144,6 +145,56 @@ class FreeResearchTests(unittest.IsolatedAsyncioTestCase):
                      "url":"https://example.org/press/offshore",
                      "snippet":"Company profile"}
         self.assertEqual(source_relevance(unrelated, terms), 0)
+
+    def test_leo_geo_malay_query_keeps_orbits_ahead_of_generic_latency(self):
+        q = ("/deepdive Bandingkan internet satelit LEO vs GEO untuk kapal offshore: "
+             "latency, kelajuan, liputan, cuaca, dan handover.")
+        terms = search_query_terms(q)
+        self.assertEqual(terms[:3], ["leo", "geo", "satellite"])
+        self.assertIn("offshore", terms)
+        self.assertIn("speed", terms)
+        self.assertIn("coverage", terms)
+        self.assertIn("weather", terms)
+        generic = {"title": "What is latency? - IBM",
+                   "url": "https://www.ibm.com/think/topics/latency",
+                   "snippet": "Network latency and bandwidth measurements"}
+        self.assertEqual(source_relevance(generic, terms), 0)
+        relevant = [
+            {"title": "LEO GEO satellite broadband for maritime vessels",
+             "url": "https://orbitalpha.org/guides/leo-geo-satellite-maritime",
+             "snippet": "Compare offshore GEO LEO coverage and latency"},
+            {"title": "LEO satellite handover for offshore connectivity",
+             "url": "https://orbitbeta.net/articles/leo-satellite-handover",
+             "snippet": "Maritime broadband weather and vessel handover"},
+        ]
+        for item in relevant:
+            self.assertGreater(source_relevance(item, terms), 0)
+
+    async def test_leo_geo_discovery_rejects_generic_latency_and_keeps_domains(self):
+        q = ("Bandingkan internet satelit LEO dan GEO untuk kapal offshore, "
+             "latency, kelajuan, liputan, cuaca dan handover.")
+        rss = b"""<rss><channel>
+        <item><title>What is latency? - IBM</title>
+          <link>https://www.ibm.com/think/topics/latency</link>
+          <description>Network latency and bandwidth</description></item>
+        <item><title>LEO GEO satellite broadband for maritime vessels</title>
+          <link>https://orbitalpha.org/guides/leo-geo-satellite-maritime</link>
+          <description>GEO and LEO offshore coverage latency</description></item>
+        <item><title>LEO satellite handover for offshore connectivity</title>
+          <link>https://orbitbeta.net/articles/leo-satellite-handover</link>
+          <description>Maritime vessels weather and handover</description></item>
+        </channel></rss>"""
+        def mock(request):
+            if request.url.host == "www.bing.com":
+                return httpx.Response(200, content=rss)
+            if request.url.host == "en.wikipedia.org":
+                return httpx.Response(200, json={"query": {"search": []}})
+            return httpx.Response(503)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as client:
+            results = await public_source_search(q, client=client)
+        hosts = {urlsplit(r["url"]).hostname for r in results}
+        self.assertEqual(hosts, {"orbitalpha.org", "orbitbeta.net"})
+        self.assertNotIn("www.ibm.com", hosts)
 
     def test_wifi_research_keeps_topic_not_malay_instructions(self):
         question = ("/deepdive Deep research: Bandingkan Wi-Fi 7 dengan Wi-Fi 6 berdasarkan "
