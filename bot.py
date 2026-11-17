@@ -351,7 +351,7 @@ async def advanced_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             answer, succeeded = await asyncio.wait_for(
                 run_advanced(question, api_key, mode, history=history,
-                             memory_notes=notes), timeout=58,
+                             memory_notes=notes), timeout=110,
             )
         except (asyncio.TimeoutError, ValueError):
             answer, succeeded = "Penyelidikan terlalu lama atau input tidak sah.", False

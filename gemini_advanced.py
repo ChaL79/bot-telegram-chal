@@ -27,9 +27,19 @@ MODE_LIMITS = {"power": (2, 12), "deepdive": (2, 12)}  # RPM, local per-UTC-day 
 MAX_INPUT_CHARS = 3200
 # One Gemini API request per command. Deep Dive may take longer to generate
 # from multiple real source excerpts; allow more read time WITHOUT retries.
-GEMINI_READ_TIMEOUT = {"power": 35.0, "deepdive": 55.0}
+# High thinking may need substantially more inference time than minimal.
+# Keep exactly ONE Gemini request and preserve a finite timeout.
+GEMINI_READ_TIMEOUT = {"power": 70.0, "deepdive": 85.0}
+# Includes hidden thinking tokens; too-small caps can produce no visible answer.
+# Do not configure a paid model or automatically retry on quota/timeout.
+GEMINI_MAX_OUTPUT_TOKENS = {"power": 6144, "deepdive": 8192}
+GEMINI_THINKING_LEVEL = {"power": "high", "deepdive": "high"}
 
 RESEARCH_PROMPT = (
+    "Gunakan penalaran mendalam secara dalaman: nilaikan maksud soalan, "
+    "kualiti bukti, percanggahan, andaian dan alternatif sebelum menjawab. "
+    "Jangan dedahkan pemikiran dalaman atau mereka bukti; hanya berikan "
+    "kesimpulan, sebab yang boleh disemak dan ketidakpastian. "
     "Anda penganalisis penyelidikan umum merentas semua topik: sains, teknologi, "
     "perniagaan, sejarah, budaya, kesihatan, agama dan hal semasa. "
     "Jawab dalam Bahasa Melayu dengan gaya jelas, profesional dan praktikal. "
@@ -64,6 +74,9 @@ RESEARCH_PROMPT = (
 )
 POWER_PROMPT = (
     "Anda pembantu analisis teknikal berdisiplin. Jawab dalam Bahasa Melayu. "
+    "Gunakan penalaran dalaman mendalam, periksa andaian dan pilihan "
+    "sebelum memberikan jawapan ringkas serta justifikasi yang boleh disemak. "
+    "Jangan keluarkan pemikiran dalaman mentah. "
     "Berikan analisis ringkas tetapi tepat: andaian, pengiraan ringkas, 3-5 risiko, "
     "dan tindakan disyorkan. Jangan mereka hasil ujian, sumber atau data live. "
     "Jangan menulis terlalu panjang; jika tugas besar pecahkan kepada beberapa bahagian. "
@@ -296,7 +309,13 @@ async def run_advanced(
         "contents": history_items + [{"role": "user", "parts": [{"text": question_with_context}]}],
         "generationConfig": {
             "temperature": 0.3 if research else 0.4,
-            "maxOutputTokens": 1700 if research else 2200,
+            "maxOutputTokens": GEMINI_MAX_OUTPUT_TOKENS[mode],
+            # Google Gemini 3.5 Flash-Lite supports high thinking in REST
+            # generateContent; don't emit thought summaries into Telegram.
+            "thinkingConfig": {
+                "thinkingLevel": GEMINI_THINKING_LEVEL[mode],
+                "includeThoughts": False,
+            },
         },
     }
 
@@ -340,6 +359,16 @@ async def run_advanced(
             return "Gemini memberikan respons tidak sah.", False
         answer = visible_reply(data)
         if not answer:
+            try:
+                finish_reason = data["candidates"][0].get("finishReason", "")
+            except (KeyError, IndexError, AttributeError, TypeError):
+                finish_reason = ""
+            if finish_reason == "MAX_TOKENS":
+                return (
+                    "Gemini menggunakan had token untuk reasoning High sebelum "
+                    "sempat menghasilkan jawapan. Cuba pecahkan soalan kepada "
+                    "bahagian lebih khusus. Tiada cubaan API kedua dibuat."
+                ), False
             return "Gemini tidak mengembalikan jawapan teks. Cuba soalan lebih ringkas.", False
         if not research:
             return answer[:7500], True

@@ -133,8 +133,8 @@ class AdvancedTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(calls), 1)
         self.assertIn("masa tamat", answer)
         self.assertIn("BUKAN analisis Gemini", answer)
-        self.assertEqual(GEMINI_READ_TIMEOUT["deepdive"], 55.0)
-        self.assertEqual(GEMINI_READ_TIMEOUT["power"], 35.0)
+        self.assertEqual(GEMINI_READ_TIMEOUT["deepdive"], 85.0)
+        self.assertEqual(GEMINI_READ_TIMEOUT["power"], 70.0)
 
     async def test_power_single_network_failure_no_retry(self):
         calls = []
@@ -190,7 +190,7 @@ class AdvancedTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(calls), 1)
         self.assertNotIn("Petikan halaman", answer)
 
-    async def test_power_uses_proven_flash_lite_no_thinking_high(self):
+    async def test_power_uses_high_thinking_on_free_flash_lite(self):
         seen = []
         def mock(req):
             seen.append((str(req.url), json.loads(req.content)))
@@ -201,8 +201,74 @@ class AdvancedTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(answer, "Selesai")
         self.assertIn("gemini-3.5-flash-lite", seen[0][0])
         self.assertEqual(POWER_MODEL, "gemini-3.5-flash-lite")
-        self.assertNotIn("thinkingConfig", seen[0][1]["generationConfig"])
+        self.assertEqual(seen[0][1]["generationConfig"]["thinkingConfig"],
+                         {"thinkingLevel": "high", "includeThoughts": False})
+        self.assertEqual(seen[0][1]["generationConfig"]["maxOutputTokens"], 6144)
         self.assertNotIn("tools", seen[0][1])
+
+    async def test_deepdive_uses_high_thinking_and_bounded_output(self):
+        from unittest.mock import patch
+        seen = []
+        refs = [{"title": "NASA research", "provider": "Official research",
+                 "url": "https://science.nasa.gov/climate-change/",
+                 "read_status": "verified_page_excerpt",
+                 "excerpt": "NASA scientific research measures and explains climate trends.",
+                 "published": ""}]
+        def mock(req):
+            seen.append(json.loads(req.content))
+            return httpx.Response(200, json={"candidates": [
+                {"content": {"parts": [{"text": "Dapatan berdasarkan bukti."}]}}
+            ]})
+        with patch("gemini_advanced.public_source_search", return_value=refs):
+            with patch("gemini_advanced.enrich_with_read_excerpts", return_value=refs):
+                async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as cli:
+                    answer, ok = await run_advanced(
+                        "Jelaskan bukti perubahan iklim", "TEST_KEY",
+                        "deepdive", client=cli)
+        self.assertTrue(ok)
+        self.assertIn("Dapatan berdasarkan bukti", answer)
+        self.assertEqual(len(seen), 1)
+        config = seen[0]["generationConfig"]
+        self.assertEqual(config["thinkingConfig"],
+                         {"thinkingLevel": "high", "includeThoughts": False})
+        self.assertEqual(config["maxOutputTokens"], 8192)
+        self.assertNotIn("tools", seen[0])
+
+    async def test_high_thinking_hidden_thoughts_not_in_answer(self):
+        from unittest.mock import patch
+        refs = [{"title": "Public study", "provider": "Open web",
+                 "url": "https://example.org/study",
+                 "read_status": "search_metadata_only", "published": ""}]
+        def mock(req):
+            return httpx.Response(200, json={"candidates": [
+                {"content": {"parts": [
+                    {"text": "Hidden thinking token", "thought": True},
+                    {"text": "Visible evidence summary."}
+                ]}}
+            ]})
+        with patch("gemini_advanced.public_source_search", return_value=refs):
+            with patch("gemini_advanced.enrich_with_read_excerpts", return_value=refs):
+                async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as cli:
+                    answer, ok = await run_advanced(
+                        "Sila kaji", "TEST_KEY", "deepdive", client=cli)
+        self.assertTrue(ok)
+        self.assertIn("Visible evidence summary", answer)
+        self.assertNotIn("Hidden thinking token", answer)
+
+    async def test_max_tokens_without_visible_answer_is_reported_without_retry(self):
+        called = []
+        def mock(req):
+            called.append(req)
+            return httpx.Response(200, json={
+                "candidates": [{"finishReason": "MAX_TOKENS",
+                                "content": {"parts": [{"text": "internal thought",
+                                                       "thought": True}]}}]
+            })
+        async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as cli:
+            answer, ok = await run_advanced("Audit", "TEST_KEY", "power", client=cli)
+        self.assertFalse(ok)
+        self.assertIn("had token", answer)
+        self.assertEqual(len(called), 1)
 
     async def test_public_search_unavailable_no_fabricated_research(self):
         def search_mock(req):
