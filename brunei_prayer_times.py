@@ -47,7 +47,7 @@ MONTHS = {
     "mac": 3, "march": 3, "april": 4, "mei": 5, "may": 5,
     "jun": 6, "june": 6, "julai": 7, "july": 7, "ogos": 8,
     "august": 8, "september": 9, "oktober": 10, "october": 10,
-    "november": 11, "disember": 12, "december": 12,
+    "november": 11, "nov": 11, "disember": 12, "december": 12, "dec": 12,
 }
 MAX_RESPONSE_BYTES = 100_000
 REQUIRED_KEYS = ("imsak", "fajr", "syuruk", "dhuhr", "asr", "maghrib", "isha")
