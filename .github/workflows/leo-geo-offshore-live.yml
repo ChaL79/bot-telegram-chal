@@ -252,6 +252,29 @@ jobs:
                   print("INDEX_ERROR",name,type(exc).__name__,flush=True)
           asyncio.run(probe())
           PY
+      - name: Diagnose individual news publisher relevance before reading
+        run: |
+          python - <<'PY'
+          import asyncio,httpx
+          from urllib.parse import urlsplit
+          from free_research import parse_bing_news_rss,search_query_terms,source_relevance
+          q="Bandingkan internet satelit LEO dan GEO untuk kapal offshore, termasuk latency kelajuan liputan cuaca handover"
+          terms=search_query_terms(q)
+          variants=[" ".join(terms[:6]),"LEO GEO satellite maritime","satellite maritime offshore connectivity"]
+          async def main():
+            async with httpx.AsyncClient(timeout=9,follow_redirects=False) as client:
+              for phrase in variants:
+                try:
+                  r=await client.get("https://www.bing.com/news/search",params={"q":phrase,"format":"rss"})
+                  rows=parse_bing_news_rss(r.content,limit=15) if r.status_code==200 else []
+                  print("NEWS_VARIANT",phrase,"HTTP",r.status_code,"ROWS",len(rows),flush=True)
+                  for row in rows:
+                    print("NEWS_SCORE",source_relevance(row,terms),
+                      urlsplit(row["url"]).hostname,row["title"][:90],flush=True)
+                except Exception as e:
+                  print("NEWS_PROBE_FAILED",type(e).__name__,flush=True)
+          asyncio.run(main())
+          PY
       - name: Require two independent topical verified page excerpts
         env:
           ENABLE_GENERAL_PUBLIC_READER: '1'
