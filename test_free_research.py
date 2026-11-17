@@ -51,7 +51,7 @@ class FreeResearchTests(unittest.IsolatedAsyncioTestCase):
                 return httpx.Response(200, json={"query": {"search": [
                     {"title": "Python asyncio programming", "snippet": "Programming"}
                 ]}})
-            if req.url.host == "news.google.com":
+            if req.url.host in ("ms.wikipedia.org", "news.google.com"):
                 return httpx.Response(503)
             if req.url.host in ("api.stackexchange.com", "hn.algolia.com"):
                 return httpx.Response(403)
@@ -60,7 +60,7 @@ class FreeResearchTests(unittest.IsolatedAsyncioTestCase):
             sources = await public_source_search("Cari sumber tentang Python asyncio rate limiting. Ringkaskan dapatan.", client=client)
         # One extra no-key Bing News discovery call is allowed when publishers
         # are missing; it must not change verified-document semantics.
-        self.assertEqual(len(calls), 6)
+        self.assertEqual(len(calls), 7)
         self.assertTrue(any("/news/search" in url for url in calls))
         self.assertEqual(len(sources), 2)
         self.assertTrue(any("docs.python.org" in source["url"] for source in sources))

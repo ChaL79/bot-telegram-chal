@@ -125,7 +125,7 @@ class PublicReaderSecurityTests(unittest.IsolatedAsyncioTestCase):
         )) as cli:
             self.assertEqual(await read_public_html(url, client=cli), content.decode())
 
-    async def test_general_reader_disabled_by_default(self):
+    async def test_general_reader_can_be_disabled_explicitly(self):
         from unittest.mock import patch
         sources = [{"title": "WCAG 2.2 keyboard accessibility",
                     "url": "https://www.w3.org/TR/WCAG22/",
@@ -134,7 +134,7 @@ class PublicReaderSecurityTests(unittest.IsolatedAsyncioTestCase):
         async with httpx.AsyncClient(transport=httpx.MockTransport(
             lambda req: self.fail("Reader must not fetch with flag disabled")
         )) as cli:
-            with patch.dict("os.environ", {}, clear=True):
+            with patch.dict("os.environ", {"ENABLE_GENERAL_PUBLIC_READER":"0"}, clear=True):
                 result = await enrich_with_read_excerpts(
                     "WCAG 2.2 keyboard focus", sources, client=cli)
         self.assertEqual(result[0]["read_status"], "search_metadata_only")

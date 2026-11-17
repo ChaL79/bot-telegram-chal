@@ -214,7 +214,7 @@ class AdvancedTests(unittest.IsolatedAsyncioTestCase):
                 answer, ok = await run_advanced("Berita terkini", "TEST_KEY", "deepdive",
                                                 client=client, search_client=search_client)
         self.assertFalse(ok)
-        self.assertIn("tidak boleh mengesahkan", answer)
+        self.assertIn("tidak akan meneka", answer)
 
     async def test_429_no_retry(self):
         count = 0

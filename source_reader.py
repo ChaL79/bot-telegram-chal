@@ -824,7 +824,12 @@ async def enrich_with_read_excerpts(
     # across all methods, avoid adding domains as explicit allowlist entries.
     general_candidate_urls = set()
     fallback_refs = []
-    if os.environ.get("ENABLE_GENERAL_PUBLIC_READER", "0") == "1" and not official_google and not identity_docs:
+    # General public article reading is enabled by default for universal
+    # /deepdive. A deployment can disable it instantly by setting
+    # ENABLE_GENERAL_PUBLIC_READER=0 (safe rollback without code changes).
+    # No user-supplied URLs are fetched; only relevant search-index results
+    # pass a DNS-pinned HTTPS-only reader with fixed size/time bounds.
+    if os.environ.get("ENABLE_GENERAL_PUBLIC_READER", "1") == "1" and not official_google and not identity_docs:
         fallback_refs = (accessibility_official_fallbacks(question, sources)
                          + requested_fatigue_official_refs(question, sources)
                          + wifi7_comparison_recovery(question, sources))
