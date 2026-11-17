@@ -35,7 +35,7 @@ def prepare_speech_text(answer: str) -> str:
     """Read meaningful plain text, never code fences, URLs or raw markdown."""
     if not isinstance(answer, str) or not answer.strip():
         return ""
-    plain = re.sub(r"(?s)"+r"\`{3}.*?\`{3}", " [blok kod tidak dibaca] ", answer)
+    plain = re.sub(r"(?s)```.*?```", " [blok kod tidak dibaca] ", answer)
     plain = re.sub(r"https?://[^\s)]+", "pautan dalam teks", plain)
     plain = re.sub(r"\[([^\]]{1,100})\]\([^)]+\)", r"\1", plain)
     plain = re.sub(r"[#*_~\`]+", "", plain)
