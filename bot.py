@@ -572,9 +572,14 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             result = await asyncio.wait_for(
                 analyze_image(data, question, GROQ_API_KEY), timeout=40)
         elif extension == ".pdf":
-            result = await asyncio.wait_for(
-                analyze_pdf(data, question, os.environ.get("GEMINI_API_KEY", ""),
-                            os.environ.get("GEMINI_MODEL", MODEL_DEFAULT)), timeout=43)
+            try:
+                result = await asyncio.wait_for(
+                    analyze_pdf(data, question, os.environ.get("GEMINI_API_KEY", ""),
+                                os.environ.get("GEMINI_MODEL", MODEL_DEFAULT)), timeout=43)
+            except asyncio.TimeoutError:
+                # Outer timeout must also enter the text fallback, never silently
+                # drop to the generic document handler error.
+                result = "Analisis PDF gagal atau tamat masa. Cuba fail lebih kecil."
             if should_fallback_pdf(result):
                 # Safe degradation: local PDF text + existing Groq text model.
                 # Do not claim text extraction can inspect charts or scans.
@@ -589,13 +594,19 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         {"role": "user", "content": question +
                             "\n\nPETIKAN TEKS PDF (maksimum 8 halaman):\n" + extracted},
                     ]), timeout=45)
-                    result = ("Gemini sedang terganggu; saya menggunakan teks PDF "
-                              "dan Groq sebagai fallback. Imej/carta tidak dianalisis."
-                              "\n\n" + summary)
+                    if summary == FINAL_ERROR_MESSAGE:
+                        result = ("Gemini dan Groq tidak dapat menjawab sekarang. "
+                                  "Teks PDF telah diekstrak, tetapi analisis AI gagal. "
+                                  "Cuba semula kemudian.")
+                    else:
+                        result = ("Gemini sedang terganggu; saya menggunakan teks PDF "
+                                  "dan Groq sebagai fallback. Imej/carta tidak dianalisis."
+                                  "\n\n" + summary)
                 else:
-                    result = ("Gemini sedang terganggu dan tiada teks PDF yang "
-                              "dapat diekstrak. Jika PDF ini ialah imbasan atau "
-                              "imej, cuba semula apabila Gemini pulih.")
+                    result = ("Gemini tidak dapat dihubungi atau terlalu lambat, "
+                              "dan PDF ini tiada teks yang dapat diekstrak. "
+                              "Jika ia PDF imbasan atau banyak imej, cuba semula "
+                              "apabila Gemini pulih.")
         else:
             try:
                 extracted = extract_document_text(data, extension)
