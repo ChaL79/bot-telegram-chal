@@ -151,7 +151,7 @@ MALAY_RESEARCH_TERMS = {
     # Cross-domain maritime and satellite concepts: vocabulary only, no vendor URLs.
     "satelit": "satellite",
     "satelitnya": "satellite",
-    "kapal": "vessel",
+    "kapal": "maritime",
     "laut": "maritime",
     "kelajuan": "speed",
     "liputan": "coverage",
@@ -395,7 +395,16 @@ def source_relevance(item: dict, query_terms: list[str]) -> int:
     if len(sought) >= 3 and not (set(sought[:2]) & matched):
         return 0
     # Title matches are more relevant than incidental snippet/domain tokens.
-    return len(matched) + 2 * len(matched & title_terms)
+    score = len(matched) + 2 * len(matched & title_terms)
+    # Source-specific keywords from the user's request beat incidental matching:
+    # generic LEO/GEO press releases must not displace offshore/maritime evidence.
+    # This boosts the query SUBJECT (not publishers or static article URLs).
+    if "maritime" in sought and ({"leo", "geo"} & set(sought)):
+        if {"maritime", "offshore", "vessel", "ship", "ships"} & title_terms:
+            score += 8
+        elif {"maritime", "offshore", "vessel", "ship", "ships"} & content_terms:
+            score += 3
+    return score
 
 
 def clean(value: str, size: int = 280) -> str:
@@ -943,7 +952,25 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
         # directly readable article-style URLs before tracking/news redirects.
         # Preserve institution-specific ranking for the curated protocols.
         if not organizations and not accessibility_orgs:
-            ranked = prioritize_readable_sources(ranked)
+            if "maritime" in terms and "satellite" in terms:
+                # Prefer evidence explicitly about the requested maritime
+                # context before generic press releases with deep URL paths.
+                ranked = sorted(
+                    ranked,
+                    key=lambda pair: (pair[0], readable_article_priority(pair[1])),
+                    reverse=True,
+                )
+                selected, repeats, hosts = [], [], set()
+                for pair in ranked:
+                    hostname = urlsplit(pair[1]["url"]).hostname
+                    if hostname in hosts:
+                        repeats.append(pair)
+                    else:
+                        hosts.add(hostname)
+                        selected.append(pair)
+                ranked = selected + repeats
+            else:
+                ranked = prioritize_readable_sources(ranked)
         # Preserve distinct official sources before generic indexing results.
         if len(named_product_orgs) >= 1:
             official, selected_urls = [], set()
