@@ -61,8 +61,9 @@ class VoiceHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         src = Path(__file__).with_name("bot.py").read_text(encoding="utf-8")
         tree = ast.parse(src)
-        fn = next(n for n in tree.body if isinstance(n, ast.AsyncFunctionDef)
-                  and n.name == "handle_voice")
+        fns = [n for n in tree.body if isinstance(n, ast.AsyncFunctionDef)
+               and n.name in ("handle_voice", "fetch_voice_file_with_retry")]
+        self.assertEqual(len(fns), 2)
         paths = []
         async def download(dest):
             paths.append(dest)
@@ -94,6 +95,7 @@ class VoiceHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
         namespace = {
             "Update": object, "ContextTypes": SimpleNamespace(DEFAULT_TYPE=object),
             "asyncio": asyncio, "uuid": uuid,
+            "NetworkError": type("NetworkError", (Exception,), {}),
             "AudioSegment": SimpleNamespace(from_file=lambda *args, **kw: FakeAudio()),
             "SYSTEM_PROMPT": "test", "FINAL_ERROR_MESSAGE": "fallback",
             "transcribe_voice": simulated_transcribe, "ask_ai": simulated_ask_ai,
@@ -106,7 +108,7 @@ class VoiceHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
             "is_private_owner_update": lambda update: True,
             "log": logging.getLogger("voice_handler_test"),
         }
-        exec(compile(ast.Module(body=[fn], type_ignores=[]),
+        exec(compile(ast.Module(body=fns, type_ignores=[]),
                      filename="bot.py", mode="exec"), namespace)
         try:
             if reply_error and not download_error and transcription:
@@ -152,6 +154,74 @@ class VoiceHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(paths), 2)
         transcribe.assert_awaited_once()
         ask_ai.assert_awaited_once()
+
+class TelegramDownloadRetryTests(unittest.IsolatedAsyncioTestCase):
+    """Execute the production retry helper without real Telegram credentials."""
+    async def _subject(self):
+        import asyncio
+        import logging
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+        src = Path(__file__).with_name("bot.py").read_text(encoding="utf-8")
+        tree = ast.parse(src)
+        fn = next(n for n in tree.body
+                  if isinstance(n, ast.AsyncFunctionDef)
+                  and n.name == "fetch_voice_file_with_retry")
+        class TestNetworkError(Exception): pass
+        ns = {"asyncio": asyncio, "NetworkError": TestNetworkError,
+              "log": logging.getLogger("voice-retry-test")}
+        exec(compile(ast.Module(body=[fn], type_ignores=[]), "bot.py", "exec"), ns)
+        return ns["fetch_voice_file_with_retry"], TestNetworkError
+
+    async def test_get_file_timeout_then_success(self):
+        from unittest.mock import AsyncMock, patch
+        function, _ = await self._subject()
+        remote = type("FakeFile", (), {})()
+        remote.download_to_drive = AsyncMock(return_value=None)
+        get_file = AsyncMock(side_effect=[asyncio.TimeoutError(), remote])
+        client = type("FakeBot", (), {"get_file": get_file})()
+        with patch("asyncio.sleep", new_callable=AsyncMock) as pause:
+            await function(client, "private_file_id", "/tmp/retry-test-voice.oga")
+        self.assertEqual(get_file.await_count, 2)
+        remote.download_to_drive.assert_awaited_once()
+        pause.assert_awaited_once()
+
+    async def test_download_network_failure_then_success(self):
+        from unittest.mock import AsyncMock, patch
+        function, NetworkFailure = await self._subject()
+        first = type("File", (), {})()
+        first.download_to_drive = AsyncMock(side_effect=NetworkFailure())
+        second = type("File", (), {})()
+        second.download_to_drive = AsyncMock(return_value=None)
+        client = type("Bot", (), {})()
+        client.get_file = AsyncMock(side_effect=[first, second])
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            await function(client, "fileid", "/tmp/retry-test-voice.oga")
+        self.assertEqual(client.get_file.await_count, 2)
+        first.download_to_drive.assert_awaited_once()
+        second.download_to_drive.assert_awaited_once()
+
+    async def test_persistent_timeout_fails_after_two_attempts(self):
+        from unittest.mock import AsyncMock, patch
+        function, NetworkFailure = await self._subject()
+        client = type("Bot", (), {})()
+        client.get_file = AsyncMock(side_effect=NetworkFailure())
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            with self.assertRaises(NetworkFailure):
+                await function(client, "private-id", "/tmp/retry-test-voice.oga")
+        self.assertEqual(client.get_file.await_count, 2)
+
+    async def test_non_transient_error_never_retries(self):
+        from unittest.mock import AsyncMock, patch
+        function, NetworkFailure = await self._subject()
+        client = type("Bot", (), {})()
+        client.get_file = AsyncMock(side_effect=PermissionError("not allowed"))
+        with patch("asyncio.sleep", new_callable=AsyncMock) as pause:
+            with self.assertRaises(PermissionError):
+                await function(client, "id", "/tmp/retry-test-voice.oga")
+        client.get_file.assert_awaited_once()
+        pause.assert_not_awaited()
+
 
 if __name__ == "__main__":
     unittest.main()
