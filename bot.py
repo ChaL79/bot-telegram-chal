@@ -1,6 +1,7 @@
 import os
 import asyncio
 import random
+import uuid
 import logging
 import httpx
 from pydub import AudioSegment
@@ -331,8 +332,10 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-    ogg_path = f"/tmp/{msg.voice.file_unique_id}.oga"
-    wav_path = f"/tmp/{msg.voice.file_unique_id}.wav"
+    # Per-request random names prevent concurrent requests sharing an audio path.
+    nonce = uuid.uuid4().hex
+    ogg_path = f"/tmp/chal_voice_{nonce}.oga"
+    wav_path = f"/tmp/chal_voice_{nonce}.wav"
 
     # Remove audio artifacts on success, failure, and early return.
     # Never log a voice transcript or a user-linked temporary file path.
