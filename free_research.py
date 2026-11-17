@@ -10,7 +10,7 @@ import ipaddress
 import json
 import logging
 import re
-from urllib.parse import quote, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 from xml.etree import ElementTree
 
 import httpx
@@ -447,6 +447,54 @@ def parse_rss(raw: bytes, provider: str, limit: int = 4) -> list[dict]:
     return items
 
 
+def parse_bing_news_rss(raw: bytes, *, limit: int = 8) -> list[dict]:
+    """Extract actual publisher URLs from Bing News RSS metadata without following redirects.
+
+    Search providers can wrap a publisher URL inside a Bing /news/apiclick.aspx
+    link. Only extract the single encoded `url` parameter of that exact endpoint.
+    The extracted URL is still UNVERIFIED until the independent DNS-pinned HTML
+    reader fetches and extracts real relevant page content.
+    """
+    if len(raw) > MAX_BYTES or b"<!DOCTYPE" in raw.upper() or b"<!ENTITY" in raw.upper():
+        return []
+    try:
+        root = ElementTree.fromstring(raw)
+    except ElementTree.ParseError:
+        return []
+    found = []
+    used = set()
+    for item in root.findall("./channel/item")[:limit * 5]:
+        wrapper = (item.findtext("link") or "").strip()
+        try:
+            p = urlsplit(wrapper)
+            if (p.scheme not in ("http", "https")
+                    or p.hostname not in ("www.bing.com", "bing.com")
+                    or p.path.lower() != "/news/apiclick.aspx"
+                    or p.username or p.password or p.fragment):
+                continue
+            candidates = parse_qs(p.query, keep_blank_values=False).get("url", [])
+            if len(candidates) != 1:
+                continue
+            target = candidates[0]
+            if target in used or not safe_public_article_url(target):
+                continue
+        except (UnicodeError, ValueError):
+            continue
+        title = clean(item.findtext("title") or "", 115)
+        if not title:
+            continue
+        used.add(target)
+        found.append({
+            "provider": "Bing News RSS (publisher link; HTML not yet verified)",
+            "title": title, "url": target,
+            "snippet": clean(item.findtext("description") or "", 300),
+            "published": clean(item.findtext("pubDate") or "", 55),
+        })
+        if len(found) >= limit:
+            break
+    return found
+
+
 def parse_wikipedia(data: dict, limit: int = 3) -> list[dict]:
     if not isinstance(data, dict):
         return []
@@ -712,6 +760,24 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
                      org, len(result))
             return result[:4]
 
+        async def get_bing_news():
+            # One bounded fallback for weak discovery. Publisher article links
+            # come from real search-result metadata; no fixed vendor URLs.
+            # The Bing wrapper is NEVER fetched, and extracted article targets
+            # must pass the existing safe-public-URL and DNS-pinned HTML reader.
+            resp = await session.get(
+                "https://www.bing.com/news/search",
+                params={"q": " ".join(terms[:6])[:160], "format": "rss"},
+                timeout=7.0,
+                follow_redirects=False,
+            )
+            if resp.status_code != 200:
+                log.info("Bing News RSS unavailable HTTP %s", resp.status_code)
+                return []
+            items = parse_bing_news_rss(resp.content, limit=12)
+            log.info("Bing News publisher links discovered %d", len(items))
+            return items
+
         async def get_wikipedia():
             resp = await session.get(
                 "https://en.wikipedia.org/w/api.php",
@@ -818,6 +884,32 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
                     score = max(score, 6)
                 if score > 0:
                     ranked.append((score, item))
+        # Invoke the independent news RSS index only when primary providers
+        # failed to discover two different directly-readable publisher hosts.
+        # Metadata wrappers and encyclopedias are not counted as evidence here.
+        weak_hosts = {"news.google.com", "en.wikipedia.org", "en.m.wikipedia.org"}
+        genuine_hosts = {
+            urlsplit(item["url"]).hostname for _, item in ranked
+            if safe_public_article_url(item["url"])
+            and urlsplit(item["url"]).hostname not in weak_hosts
+        }
+        if len(genuine_hosts) < 2:
+            try:
+                news_hits = await get_bing_news()
+            except (httpx.HTTPError, ValueError, UnicodeError) as exc:
+                log.info("Bing News RSS discovery unavailable kind=%s",
+                         type(exc).__name__)
+                news_hits = []
+            for item in news_hits:
+                if item["url"] in urls:
+                    continue
+                urls.add(item["url"])
+                score = source_relevance(item, terms)
+                if score > 0:
+                    ranked.append((score, item))
+            log.info("Independent news discovery candidates=%d",
+                     sum(1 for _, ref in ranked
+                         if ref.get("provider", "").startswith("Bing News RSS")))
         ranked.sort(key=lambda pair: pair[0], reverse=True)
         # General open-web reading is limited to three network attempts: put
         # directly readable article-style URLs before tracking/news redirects.
