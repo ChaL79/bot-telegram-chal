@@ -148,6 +148,18 @@ MALAY_RESEARCH_TERMS = {
     "kemalangan": "accidents",
     "kecederaan": "injuries",
     "kesihatan": "health",
+    # Cross-domain maritime and satellite concepts: vocabulary only, no vendor URLs.
+    "satelit": "satellite",
+    "satelitnya": "satellite",
+    "kapal": "vessel",
+    "laut": "maritime",
+    "kelajuan": "speed",
+    "liputan": "coverage",
+    "cuaca": "weather",
+    "hujan": "rain",
+    "pendaman": "latency",
+    "peralihan": "handover",
+    "kestabilan": "reliability",
 }
 
 def _terms(value: str) -> list[str]:
@@ -182,6 +194,9 @@ TOPIC_ANCHORS = frozenset({
     "wifi7", "wifi6", "wifi", "mlo", "6ghz", "latency", "multilink",
     # Occupational safety: keep the subject, not Malay task scaffolding, first.
     "fatigue", "shift", "work", "sleep", "cdc", "niosh", "hse",
+    # Orbit terminology must outrank generic latency/speed in comparison queries.
+    "leo", "geo", "satellite", "maritime", "offshore", "vsat",
+    "handover", "orbit", "geostationary", "constellation",
 })
 IDENTITY_ANCHORS = frozenset({
     "passkeys", "passkey", "fido2", "totp", "mfa", "otp", "phishing",
@@ -233,6 +248,10 @@ def _canonical(term: str) -> str:
         return "request"
     if term in ("thread", "threads", "threading"):
         return "thread"
+    if term in ("satellite", "satellites"):
+        return "satellite"
+    if term in ("handover", "handovers", "handoff", "handoffs"):
+        return "handover"
     return term
 
 
@@ -307,6 +326,15 @@ def source_relevance(item: dict, query_terms: list[str]) -> int:
     )}
     sought = [_canonical(x) for x in query_terms]
     matched = set(sought) & (title_terms | content_terms)
+    # Require the defining subject, not incidental performance terminology.
+    # A page about generic network latency cannot establish LEO/GEO evidence.
+    # This is a topic-based rule; no vendor, hostname or article URL is preferred.
+    if ({"leo", "geo"} & set(sought)) and "satellite" in sought:
+        present = title_terms | content_terms
+        orbit_context = {"satellite", "orbit", "orbital", "maritime",
+                         "vsat", "geostationary", "constellation"}
+        if not (present & {"leo", "geo"}) or not (present & orbit_context):
+            return 0
     # A Gemini API privacy query must not be satisfied by generic Google
     # search results or unrelated Gemini launches. Require privacy/data-use
     # context as well as a named developer/API subject in the result itself.
