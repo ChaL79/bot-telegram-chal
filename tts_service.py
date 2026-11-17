@@ -31,6 +31,56 @@ def speech_enabled(mode: str, *, is_voice_note: bool) -> bool:
     return mode == MODE_ALL or (mode == MODE_AUTO and is_voice_note)
 
 
+# A deliberately narrow pronunciation dictionary for common Malay voice use.
+# Never globally rewrite digits: times, prices, quantities and document
+# references must retain their exact spoken meaning.
+_MUSIC_DECADES = {
+    "60": "enam puluhan",
+    "70": "tujuh puluhan",
+    "80": "lapan puluhan",
+    "90": "sembilan puluhan",
+}
+
+
+def normalize_malay_pronunciation(text: str) -> str:
+    """Convert known awkward phrases for speech only, not Telegram text.
+
+    Only decade phrases preceded by era/zaman/dekad are expanded; arbitrary
+    numeric ranges (e.g., 70-80 kg, SL/TP, quantities) remain unchanged.
+    """
+    text = re.sub(
+        r"(?i)\bchal79bot\b",
+        "Chal tujuh puluh sembilan bot",
+        text,
+    )
+    text = re.sub(
+        r"(?i)\bpembantu\s+AI\b",
+        "pembantu kecerdasan buatan",
+        text,
+    )
+    def decades(match):
+        prefix, first, second = match.groups()
+        if first == second:
+            return prefix + " " + _MUSIC_DECADES[first]
+        return (prefix + " " + _MUSIC_DECADES[first]
+                + " dan " + _MUSIC_DECADES[second])
+    text = re.sub(
+        r"(?i)\b(era|zaman|dekad)\s+(?:tahun\s+)?"
+        r"(60|70|80|90)\s*[-–—/]\s*(60|70|80|90)\b",
+        decades,
+        text,
+    )
+    def one_decade(match):
+        return match.group(1) + " " + _MUSIC_DECADES[match.group(2)]
+    text = re.sub(
+        r"(?i)\b(era|zaman|dekad)\s+(?:tahun\s+)?"
+        r"(?:19)?(60|70|80|90)[-–]?an\b",
+        one_decade,
+        text,
+    )
+    return text
+
+
 def prepare_speech_text(answer: str) -> str:
     """Read meaningful plain text, never code fences, URLs or raw markdown."""
     if not isinstance(answer, str) or not answer.strip():
@@ -40,11 +90,14 @@ def prepare_speech_text(answer: str) -> str:
     plain = re.sub(r"\[([^\]]{1,100})\]\([^)]+\)", r"\1", plain)
     plain = re.sub(r"[#*_~\`]+", "", plain)
     plain = re.sub(r"[\u200b-\u200d\ufeff]", "", plain)
+    plain = normalize_malay_pronunciation(plain)
     plain = re.sub(r"\s+", " ", plain).strip()
     if len(plain) <= MAX_SPEECH_CHARS:
         return plain
-    trimmed = plain[:MAX_SPEECH_CHARS].rsplit(" ", 1)[0].rstrip(" ,.;:")
-    return trimmed + ". Jawapan penuh ada dalam mesej teks."
+    suffix = ". Jawapan penuh ada dalam mesej teks."
+    limit = MAX_SPEECH_CHARS - len(suffix)
+    trimmed = plain[:limit].rsplit(" ", 1)[0].rstrip(" ,.;:")
+    return trimmed + suffix
 
 
 async def synthesize_malay_speech(
