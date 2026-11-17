@@ -123,6 +123,20 @@ class MediaTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(should_fallback_pdf(reply))
         self.assertFalse(should_fallback_pdf("PDF belum berjaya dianalisis (Gemini HTTP 429)."))
 
+    async def test_pdf_transport_timeout_enables_fallback(self):
+        from media_tools import should_fallback_pdf, PDF_TRANSPORT_FAILURE
+        async def responder(req):
+            raise httpx.ReadTimeout("mock timeout")
+        async with httpx.AsyncClient(transport=httpx.MockTransport(responder)) as client:
+            response = await analyze_pdf(
+                b"%PDF-1.7 mock", "ringkaskan", "gem-key",
+                "gemini-3.5-flash-lite", client=client
+            )
+        self.assertEqual(response, PDF_TRANSPORT_FAILURE)
+        self.assertTrue(should_fallback_pdf(response))
+        self.assertFalse(should_fallback_pdf(
+            "PDF belum berjaya dianalisis (Gemini HTTP 429)."))
+
     async def test_pdf_429_never_retries(self):
         requests = []
         def responder(req):
