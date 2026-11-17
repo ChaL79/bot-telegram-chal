@@ -185,6 +185,9 @@ jobs:
                       "action":"query","titles":"|".join(topics),"prop":"extlinks",
                       "ellimit":"100","format":"json"})
               print("CITE_API",r.status_code,flush=True)
+              if r.status_code != 200 or "json" not in r.headers.get("content-type",""):
+                  print("CITE_API_UNAVAILABLE",r.status_code,flush=True)
+                  return
               entries=[]
               for page in r.json().get("query",{}).get("pages",{}).values():
                   for item in page.get("extlinks",[]):
@@ -209,6 +212,45 @@ jobs:
                       if len(found)>=5:break
               print("CITE_READABLE_TOTAL",len(found),flush=True)
           asyncio.run(main())
+          PY
+      - name: Probe free scholarly discovery metadata and Bing News feed structure
+        run: |
+          python - <<'PY'
+          import asyncio, httpx
+          from urllib.parse import urlsplit
+          from xml.etree import ElementTree as ET
+          q="LEO GEO satellite maritime connectivity"
+          async def probe():
+            targets=[
+              ("openalex","https://api.openalex.org/works",{"search":q,"per-page":"8"}),
+              ("crossref","https://api.crossref.org/works",{"query":q,"rows":"6"}),
+              ("bingnews","https://www.bing.com/news/search",{"q":q,"format":"rss"}),
+            ]
+            async with httpx.AsyncClient(timeout=10,follow_redirects=False) as c:
+              for name,url,params in targets:
+                try:
+                  r=await c.get(url,params=params,headers={"User-Agent":"ChaL79Bot/1.4 research contact"})
+                  print("INDEX",name,"STATUS",r.status_code,"MIME",r.headers.get("content-type","")[:70],flush=True)
+                  if r.status_code != 200:continue
+                  if name=="openalex":
+                    for x in r.json().get("results",[])[:8]:
+                      loc=x.get("best_oa_location") or x.get("primary_location") or {}
+                      print("OA_ITEM",x.get("title","")[:90],
+                        (loc.get("landing_page_url") or "")[:180],flush=True)
+                  elif name=="crossref":
+                    for x in r.json().get("message",{}).get("items",[])[:6]:
+                      print("CROSSREF_ITEM"," ".join(x.get("title",[]))[:90],
+                        x.get("URL","")[:150],flush=True)
+                  else:
+                    root=ET.fromstring(r.content)
+                    print("BINGNEWS_ROOT",root.tag,flush=True)
+                    for x in list(root)[:3]:print("BINGNEWS_CHILD",x.tag,flush=True)
+                    for x in root.findall(".//item")[:6]:
+                      print("BINGNEWS_ITEM",x.findtext("title","")[:75],
+                            x.findtext("link","")[:140],flush=True)
+                except Exception as exc:
+                  print("INDEX_ERROR",name,type(exc).__name__,flush=True)
+          asyncio.run(probe())
           PY
       - name: Require two independent topical verified page excerpts
         env:
