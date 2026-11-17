@@ -7,6 +7,7 @@ import ast
 import asyncio
 import logging
 import os
+import re
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -27,7 +28,7 @@ def handlers_under_test():
         "Update": object,
         "ContextTypes": SimpleNamespace(DEFAULT_TYPE=object),
         "is_authorized_owner": is_authorized_owner,
-        "os": os, "asyncio": asyncio,
+        "os": os, "asyncio": asyncio, "re": re,
         "SYSTEM_PROMPT": "Test only",
         "FINAL_ERROR_MESSAGE": "Service unavailable",
         "log": logging.getLogger("owner_access_test"),
