@@ -21,6 +21,54 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install -r requirements.txt
+      - name: Diagnose no-key public search before acceptance (read-only)
+        run: |
+          python - <<'PY'
+          import asyncio
+          import httpx
+          from free_research import parse_rss, search_query_terms, source_relevance
+          from urllib.parse import urlsplit
+          samples = [
+              ("topic_orbits", "LEO GEO satellite maritime connectivity"),
+              ("orbit_full_names", "low earth orbit geostationary satellite maritime"),
+              ("ship_coverage", "satellite broadband offshore vessels GEO LEO"),
+              ("comparison", "LEO vs GEO satellite latency coverage handover"),
+          ]
+          async def probe(label, q):
+              try:
+                  async with httpx.AsyncClient(timeout=8, follow_redirects=False) as c:
+                      r = await c.get("https://www.bing.com/search",
+                                      params={"q": q, "format":"rss","mkt":"en-US"})
+                  hits = parse_rss(r.content,"diagnostic",10) if r.status_code==200 else []
+                  print("PROBE_RSS",label,"HTTP",r.status_code,"BYTES",len(r.content),
+                        "HITS",len(hits),flush=True)
+                  for h in hits[:5]:
+                      print("PROBE_RESULT",label,urlsplit(h["url"]).hostname,
+                            h.get("title","")[:100],flush=True)
+              except Exception as exc:
+                  print("PROBE_RSS",label,"ERROR",type(exc).__name__,flush=True)
+          async def alternative(label,url,params):
+              try:
+                  async with httpx.AsyncClient(timeout=8,follow_redirects=False) as c:
+                      r=await c.get(url,params=params,headers={"User-Agent":"Mozilla/5.0"})
+                  body=r.text[:150000]
+                  print("PROBE_ALT",label,"HTTP",r.status_code,"BYTES",len(r.content),
+                        "LEO",body.casefold().count("leo"),"GEO",body.casefold().count("geo"),
+                        "SATELLITE",body.casefold().count("satellite"),flush=True)
+              except Exception as exc:
+                  print("PROBE_ALT",label,"ERROR",type(exc).__name__,flush=True)
+          async def main():
+              await asyncio.gather(
+                  *(probe(label,q) for label,q in samples),
+                  alternative("ddg_html","https://html.duckduckgo.com/html/",
+                              {"q":"LEO GEO satellite maritime connectivity"}),
+                  alternative("mojeek","https://www.mojeek.com/search",
+                              {"q":"LEO GEO satellite maritime connectivity"}),
+                  alternative("google_html","https://www.google.com/search",
+                              {"q":"LEO GEO satellite maritime connectivity"}),
+              )
+          asyncio.run(main())
+          PY
       - name: Require two independent topical verified page excerpts
         env:
           ENABLE_GENERAL_PUBLIC_READER: '1'
