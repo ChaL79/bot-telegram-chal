@@ -333,7 +333,12 @@ def source_relevance(item: dict, query_terms: list[str]) -> int:
         present = title_terms | content_terms
         orbit_context = {"satellite", "orbit", "orbital", "maritime",
                          "vsat", "geostationary", "constellation"}
-        if not (present & {"leo", "geo"}) or not (present & orbit_context):
+        applied_context = {"geo", "geostationary", "orbit", "orbital", "maritime",
+                           "offshore", "vessel", "ship", "handover",
+                           "coverage", "rain", "weather", "broadband"}
+        if (not (present & {"leo", "geo"})
+                or not (present & orbit_context)
+                or not (present & applied_context)):
             return 0
     # A Gemini API privacy query must not be satisfied by generic Google
     # search results or unrelated Gemini launches. Require privacy/data-use
@@ -761,22 +766,45 @@ async def public_source_search(query: str, *, client: httpx.AsyncClient | None =
             return result[:4]
 
         async def get_bing_news():
-            # One bounded fallback for weak discovery. Publisher article links
-            # come from real search-result metadata; no fixed vendor URLs.
-            # The Bing wrapper is NEVER fetched, and extracted article targets
-            # must pass the existing safe-public-URL and DNS-pinned HTML reader.
-            resp = await session.get(
-                "https://www.bing.com/news/search",
-                params={"q": " ".join(terms[:6])[:160], "format": "rss"},
-                timeout=7.0,
-                follow_redirects=False,
-            )
-            if resp.status_code != 200:
-                log.info("Bing News RSS unavailable HTTP %s", resp.status_code)
-                return []
-            items = parse_bing_news_rss(resp.content, limit=12)
-            log.info("Bing News publisher links discovered %d", len(items))
-            return items
+            """Bounded universal news fallback; no vendor URLs or redirect fetches.
+
+            Search abbreviations are ambiguous (e.g. LEO -> zodiac). A second
+            reordered phrase is tried only if the first has too few strongly
+            topical publisher domains. This is generic query planning, not a
+            satellite-domain allowlist.
+            """
+            primary = " ".join(terms[:6])[:160]
+            acronyms = [t for t in terms if len(t) <= 3][:2]
+            subjects = [t for t in terms if len(t) > 3][:2]
+            alternative = " ".join(acronyms + subjects)[:160]
+            queries = [primary]
+            if acronyms and alternative and alternative != primary:
+                queries.append(alternative)
+            gathered = []
+            unique_urls = set()
+            for search_phrase in queries[:2]:
+                resp = await session.get(
+                    "https://www.bing.com/news/search",
+                    params={"q": search_phrase, "format": "rss"},
+                    timeout=7.0,
+                    follow_redirects=False,
+                )
+                if resp.status_code != 200:
+                    log.info("Bing News RSS unavailable HTTP %s", resp.status_code)
+                    continue
+                items = parse_bing_news_rss(resp.content, limit=12)
+                log.info("Bing News publisher links discovered %d", len(items))
+                for item in items:
+                    if item["url"] not in unique_urls:
+                        unique_urls.add(item["url"])
+                        gathered.append(item)
+                topical_hosts = {
+                    urlsplit(item["url"]).hostname for item in gathered
+                    if source_relevance(item, terms) > 0
+                }
+                if len(topical_hosts) >= 4:
+                    break
+            return gathered
 
         async def get_wikipedia():
             resp = await session.get(
