@@ -20,9 +20,9 @@ def handlers_under_test():
     selected = [
         node for node in tree.body
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and node.name in ("is_private_owner_update", "handle_message", "handle_voice")
+        and node.name in ("is_private_owner_update", "start", "myid", "handle_message", "handle_voice")
     ]
-    assert len(selected) == 3, "All production handlers must be present"
+    assert len(selected) == 5, "All protected production handlers must be present"
     namespace = {
         "Update": object,
         "ContextTypes": SimpleNamespace(DEFAULT_TYPE=object),
@@ -86,6 +86,34 @@ class OwnerOnlyAccessTests(unittest.IsolatedAsyncioTestCase):
                     ns["ask_ai"].assert_not_awaited()
                     update.effective_message.reply_text.assert_not_awaited()
                     ns["ask_ai"].reset_mock()
+
+    async def test_public_commands_are_owner_only(self):
+        ns = handlers_under_test()
+        for handler in ("start", "myid"):
+            for owner, user, chat_type in [
+                ("1234", 9999, "private"),
+                ("1234", 1234, "group"),
+                ("1234", 1234, "supergroup"),
+                ("", 1234, "private"),
+                ("invalid", 1234, "private"),
+                ("1234", None, "private"),
+            ]:
+                with self.subTest(handler=handler, owner=owner, user=user, chat=chat_type):
+                    update, ctx = fake_update(user, chat_type)
+                    with patch.dict(os.environ, {"GEMINI_OWNER_ID": owner}):
+                        await ns[handler](update, ctx)
+                    update.effective_message.reply_text.assert_not_awaited()
+
+    async def test_owner_can_still_use_start_and_myid(self):
+        ns = handlers_under_test()
+        for handler in ("start", "myid"):
+            update, ctx = fake_update(1234)
+            with patch.dict(os.environ, {"GEMINI_OWNER_ID": "1234"}):
+                await ns[handler](update, ctx)
+            update.effective_message.reply_text.assert_awaited_once()
+            self.assertTrue(update.effective_message.reply_text.await_args.args[0])
+            if handler == "myid":
+                self.assertIn("1234", update.effective_message.reply_text.await_args.args[0])
 
     async def test_legitimate_owner_text_still_works(self):
         ns = handlers_under_test()
