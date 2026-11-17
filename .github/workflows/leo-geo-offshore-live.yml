@@ -69,6 +69,56 @@ jobs:
               )
           asyncio.run(main())
           PY
+      - name: Inspect Google HTML outbound article links without fetching them
+        run: |
+          python - <<'PY'
+          import asyncio, html, re
+          from html.parser import HTMLParser
+          from urllib.parse import urljoin, urlsplit, parse_qs, unquote
+          import httpx
+          from public_article_reader import safe_public_article_url
+          class Links(HTMLParser):
+              def __init__(self):
+                  super().__init__()
+                  self.links=[]
+              def handle_starttag(self, tag, attrs):
+                  if tag=="a":
+                      href=dict(attrs).get("href","")
+                      if href:
+                          self.links.append(html.unescape(href))
+          async def main():
+              queries=["LEO GEO satellite maritime connectivity",
+                       "geostationary low earth orbit offshore satellite internet",
+                       "satellite marine handover rain fade latency"]
+              async with httpx.AsyncClient(timeout=9,follow_redirects=False) as cli:
+                  for q in queries:
+                      try:
+                          resp=await cli.get("https://www.google.com/search",
+                              params={"q":q,"num":"15"},headers={"User-Agent":"Mozilla/5.0"})
+                      except httpx.HTTPError as exc:
+                          print("GOOGLE_DIAG_ERROR",type(exc).__name__,flush=True)
+                          continue
+                      parser=Links()
+                      parser.feed(resp.text[:300000])
+                      out=[]
+                      for raw in parser.links:
+                          u=raw
+                          if raw.startswith("/url?"):
+                              u=parse_qs(urlsplit(raw).query).get("q",[""])[0]
+                          elif raw.startswith("/"):
+                              continue
+                          host=urlsplit(u).hostname or ""
+                          if host.endswith("google.com") or host.endswith("googleusercontent.com"):
+                              continue
+                          if safe_public_article_url(u) and u not in out:
+                              out.append(u)
+                      print("GOOGLE_LINKS",resp.status_code,"ANCHORS",len(parser.links),
+                            "SAFE_ARTICLE_LINKS",len(out),flush=True)
+                      for url in out[:12]:
+                          print("GOOGLE_LINK",urlsplit(url).hostname,
+                                urlsplit(url).path[:130],flush=True)
+          asyncio.run(main())
+          PY
       - name: Require two independent topical verified page excerpts
         env:
           ENABLE_GENERAL_PUBLIC_READER: '1'
