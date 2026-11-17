@@ -30,6 +30,7 @@ from memory_notes import (get_pinned_notes, write_pinned_notes,
 from natural_chat import (build_chat_messages, read_conversation,
                           record_conversation, clear_conversation,
                           valid_ai_response)
+from brunei_prayer_times import recognize_prayer_question, lookup_brunei_prayer_time
 
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL")
@@ -316,6 +317,22 @@ async def advanced_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if len(question) > MAX_INPUT_CHARS:
         await msg.reply_text(f"Soalan terlalu panjang. Had maksimum {MAX_INPUT_CHARS} aksara.")
+        return
+    # Verified-date prayer schedules are a deterministic, read-only lookup.
+    # Run this before requiring Gemini or reserving its limited free quota.
+    # It only accepts a Brunei prayer-time intent, not arbitrary web questions.
+    if mode == "deepdive" and recognize_prayer_question(question):
+        await context.bot.send_chat_action(chat_id=chat.id, action="typing")
+        try:
+            answer = await asyncio.wait_for(
+                lookup_brunei_prayer_time(question), timeout=15
+            )
+        except Exception:
+            log.warning("Brunei prayer-time lookup unavailable")
+            answer = ("Jadual waktu solat Brunei tidak dapat diakses sekarang. "
+                      "Saya tidak akan meneka waktu. Sila semak takwim KHEU.")
+        for part in split_telegram_text(answer):
+            await msg.reply_text(part)
         return
     api_key = os.environ.get("GEMINI_API_KEY", "").strip()
     if not api_key:
