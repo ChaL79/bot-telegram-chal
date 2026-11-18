@@ -19,6 +19,7 @@ CANDIDATES = {
     "SINGAPORE_MFA_ASEAN": "https://www.mfa.gov.sg/about-mfa/foreign-policy/international-organisations/association-of-southeast-asian-nations-asean/",
     "PHILIPPINES_ORIGINAL_DECLARATION": "https://elibrary.judiciary.gov.ph/thebookshelf/showdocs/36/10681",
     "INDONESIA_MFA_FOUNDING": "https://kemlu.go.id/kebijakan/asean/sejarah-dan-latar-pembentukan-asean",
+    "MALAYSIA_MFA_ASEAN": "https://www.kln.gov.my/web/chl_santiago/post/celebrating",
 }
 
 async def one(label, url):
