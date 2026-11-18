@@ -66,6 +66,15 @@ def _discovered_candidates(
                 not safe_public_article_url(url)):
             continue
         host = urlsplit(url).hostname
+        # Prevent lookalike institutional subdomains (e.g.
+        # ipcc.ch.attacker.example) from being presented even as secondary
+        # research evidence. A genuine official subdomain ends in .ipcc.ch.
+        if any(domain + "." in (host or "") and
+               not ((host or "") == domain or
+                    (host or "").endswith("." + domain))
+               for domains in requested_organizations(question).values()
+               for domain in domains):
+            continue
         if host in denied_hosts:
             # An unavailable host is not retried on another URL or via a proxy.
             continue
