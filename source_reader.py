@@ -711,6 +711,9 @@ OCCUPATIONAL_FATIGUE_DOCS = (
      "CDC/NIOSH: Fatigue and Work", "www.cdc.gov", "cdc"),
     ("https://www.hse.gov.uk/humanfactors/topics/fatigue.htm",
      "UK HSE: Fatigue and shift work", "www.hse.gov.uk", "hse"),
+    ("https://www.cdc.gov/niosh/bulletin/2020/fatigue-work.html",
+     "NIOSH: Work-related fatigue reaches beyond the workplace",
+     "www.cdc.gov", "cdc"),
 )
 
 
@@ -853,8 +856,17 @@ async def enrich_with_read_excerpts(
         for ref in targeted + fallback_refs + first_maker + secondary + sources:
             url = ref.get("url", "")
             host = urlsplit(url).hostname
+            # Keep normal cross-domain diversity. A reviewed primary fatigue
+            # reference may reuse the CDC host for a distinct NIOSH study after
+            # HSE was already selected; never apply this exception to search
+            # results, untrusted URLs, or unrelated topics.
+            reviewed_fatigue = (
+                ref in fallback_refs and
+                url in {entry[0] for entry in OCCUPATIONAL_FATIGUE_DOCS}
+            )
             if (len(approved_candidates) >= capacity or url in seen
-                    or host in seen_hosts or not safe_public_article_url(url)):
+                    or (host in seen_hosts and not reviewed_fatigue)
+                    or not safe_public_article_url(url)):
                 continue
             seen.add(url)
             seen_hosts.add(host)
@@ -920,10 +932,23 @@ async def enrich_with_read_excerpts(
               for ref in approved_candidates
               if ref["url"] in attempted_urls and ref["url"] not in read_urls]
     # Search metadata describes URLs which were discovered but NOT read.
+    # For named occupational-fatigue research, omit tangential metadata
+    # (e.g. hypothermia or workplace bullying). It was neither read nor
+    # relevant to sleep, shift-work or fatigue, so showing it would be noise.
+    fatigue_focus = bool(requested_fatigue_official_refs(question, []))
+    def relevant_unread_metadata(ref):
+        if not fatigue_focus:
+            return True
+        subject = (str(ref.get("title", "")) + " " +
+                   str(ref.get("snippet", "")) + " " +
+                   str(ref.get("url", ""))).casefold()
+        return bool(re.search(r"\b(?:fatigue|sleep|shift|night.?work|long.?hours|"
+                              r"niosh|hse|work.?hours)\b", subject))
     remaining = [{**ref, "read_status": "search_metadata_only"}
                  for ref in sources
                  if ref.get("url") not in read_urls
-                 and ref.get("url") not in attempted_urls]
+                 and ref.get("url") not in attempted_urls
+                 and relevant_unread_metadata(ref)]
     # For explicitly named institutions with NO discovered official URL, do
     # not conflate absence from the index with a failed HTTP request.
     missing = missing_named_official_sites(question, sources + fallback_refs)

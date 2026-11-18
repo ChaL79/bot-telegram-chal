@@ -884,7 +884,7 @@ No content on data practices.
              "Cari dokumentasi rasmi CDC/NIOSH Amerika Syarikat dan HSE United Kingdom. "
              "Terangkan risiko kekurangan tidur, kerja syif malam serta keselamatan pekerjaan.")
         refs = requested_fatigue_official_refs(q, [])
-        self.assertEqual(len(refs), 2)
+        self.assertEqual(len(refs), 3)
         self.assertEqual({x["url"].split("/")[2] for x in refs},
                          {"www.cdc.gov", "www.hse.gov.uk"})
         read_urls = []
@@ -900,13 +900,64 @@ No content on data practices.
         with patch.dict("os.environ", {"ENABLE_GENERAL_PUBLIC_READER": "1"}):
             with patch("source_reader.read_public_html", side_effect=page):
                 evidence = await enrich_with_read_excerpts(q, [])
-        self.assertEqual(len(read_urls), 2)
-        self.assertEqual(len(evidence), 2)
+        self.assertEqual(len(read_urls), 3)
+        self.assertEqual(len(evidence), 3)
         self.assertTrue(all(x["read_status"] == "verified_page_excerpt" for x in evidence))
         self.assertIn("Workplace fatigue", evidence[0]["excerpt"])
         self.assertIn("Shift work", evidence[1]["excerpt"])
         self.assertEqual(requested_fatigue_official_refs("Fatigue in offshore", []), [])
         self.assertEqual(requested_fatigue_official_refs("Python asyncio rate limiting CDC HSE", []), [])
+
+    async def test_exact_owner_sleep_deprivation_question_recovers_niosh_hse(self):
+        from unittest.mock import patch
+        from source_reader import requested_fatigue_official_refs
+        question = (
+            "Bandingkan kesan kekurangan tidur terhadap pekerja offshore "
+            "berdasarkan kajian CDC, NIOSH dan HSE. Bezakan bukti saintifik, "
+            "risiko serta cadangan praktikal."
+        )
+        reviewed = requested_fatigue_official_refs(question, [])
+        self.assertEqual(len(reviewed), 3)
+        self.assertEqual(
+            {r["url"].split("/")[2] for r in reviewed},
+            {"www.cdc.gov", "www.hse.gov.uk"}
+        )
+        unrelated = [
+            {"title": "Workplace bullying",
+             "url": "https://en.wikipedia.org/wiki/Workplace_bullying",
+             "provider": "Wikipedia", "snippet": "Workplace bullying", "published": ""},
+            {"title": "Hypothermia",
+             "url": "https://en.wikipedia.org/wiki/Hypothermia",
+             "provider": "Wikipedia", "snippet": "Hypothermia", "published": ""},
+        ]
+        fetched = []
+        async def page(url, *, client=None):
+            fetched.append(url)
+            if "hse.gov.uk" in url:
+                return (
+                    "<html><main><p>Fatigue during shift work and long work "
+                    "hours is a major safety risk. Offshore workers need "
+                    "fatigue risk management and sufficient recovery rest."
+                    "</p></main></html>"
+                )
+            return (
+                "<html><main><p>NIOSH fatigue research shows sleep "
+                "deprivation and shift work affect workplace alertness, "
+                "concentration, errors and worker safety. "
+                "Long working hours are linked to fatigue.</p></main></html>"
+            )
+        with patch.dict("os.environ", {"ENABLE_GENERAL_PUBLIC_READER": "1"}):
+            with patch("source_reader.read_public_html", side_effect=page):
+                result = await enrich_with_read_excerpts(question, unrelated)
+        self.assertEqual(len(fetched), 3, fetched)
+        self.assertEqual(
+            [r["read_status"] for r in result],
+            ["verified_page_excerpt"] * 3
+        )
+        self.assertNotIn("Workplace bullying", [r["title"] for r in result])
+        self.assertNotIn("Hypothermia", [r["title"] for r in result])
+        self.assertTrue(any("hse.gov.uk" in r["url"] for r in result))
+        self.assertTrue(any("niosh/fatigue" in r["url"] for r in result))
 
     async def test_wifi7_comparison_recovery_keeps_quotes_source_bound(self):
         from unittest.mock import patch
@@ -938,7 +989,7 @@ No content on data practices.
         with patch.dict("os.environ", {"ENABLE_GENERAL_PUBLIC_READER": "1"}):
             with patch("source_reader.read_public_html", side_effect=blocked):
                 result = await enrich_with_read_excerpts(q, [])
-        self.assertEqual(len(result), 2)
+        self.assertEqual(len(result), 3)
         self.assertTrue(all(x["read_status"] == "page_unavailable" for x in result))
 
     def test_ssd_secondary_reference_is_labeled_and_scoped(self):
