@@ -78,6 +78,8 @@ _QUANTITY = re.compile(
     re.IGNORECASE,
 )
 _NUMBER = re.compile(r"\d+(?:[.,]\d+)?")
+# Years are discrete factual assertions in research, not harmless quantities.
+_YEAR = re.compile(r"(?<!\d)(?:18\d{2}|19\d{2}|20\d{2})(?!\d)")
 
 
 def _numeric_values(s: str) -> set[str]:
@@ -88,19 +90,23 @@ def _numeric_values(s: str) -> set[str]:
 
 def assess_answer(question: str, answer: str, sources: list[dict]) -> dict:
     report = assess_sources(question, sources)
-    citations = {int(x) for x in re.findall(r"\[(\d{1,2})\]", answer)}
+    citations = {int(x) for x in re.findall(r"\[(\d+)\]", answer)}
     unsupported_cites = sorted(
         n for n in citations if n < 1 or n > len(sources) or not is_verified(sources[n - 1])
     )
     evidence = " ".join(str(source.get("excerpt") or "")
                         for source in sources if is_verified(source))
-    known_numbers = _numeric_values(evidence + " " + question)
+    # User questions are untrusted and cannot establish a historical fact.
+    known_numbers = _numeric_values(evidence)
     unsupported_quantities = []
     for match in _QUANTITY.finditer(answer):
         quantity = match.group().strip()
         if not _numeric_values(quantity).issubset(known_numbers):
             if quantity not in unsupported_quantities:
                 unsupported_quantities.append(quantity)
+    for year in _YEAR.findall(answer):
+        if year not in known_numbers and year not in unsupported_quantities:
+            unsupported_quantities.append(year)
     report["unsupported_citations"] = unsupported_cites
     report["unmatched_quantities"] = unsupported_quantities[:5]
     if report["status"] == "PASS" and (unsupported_cites or unsupported_quantities):
