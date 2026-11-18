@@ -1,6 +1,6 @@
 """Small reviewed public-source catalog used only if general discovery is weak.
 
-These are independently checked FIRST-PARTY or government-run HTML pages.
+Includes first-party, government founding-state and delegated-science pages.
 They are NOT evidence until read through the existing DNS-pinned HTTPS
 reader and accepted as topically relevant. No query-string/redirect bypass,
 PDF download, proxy or paid service is permitted.
@@ -18,15 +18,20 @@ IPCC_DDC_SEA_LEVEL = (
 IPCC_AR6_NASA_TOOL = "https://sealevel.nasa.gov/data_tools/17/"
 
 ASEAN_HISTORY = (
+    # Both governments are original 1967 signatories to the Bangkok
+    # Declaration; their independently published histories are authoritative
+    # historical testimony, though not the ASEAN Secretariat's own site.
+    ("https://asean.mfa.go.th/en/page/62206-the-birth-of-asean",
+     "Thai MFA ASEAN office: Birth of ASEAN",
+     "founding_government"),
+    ("https://www.mfa.gov.sg/about-mfa/foreign-policy/international-organisations/association-of-southeast-asian-nations-asean/",
+     "Singapore MFA: Association of Southeast Asian Nations (ASEAN)",
+     "founding_government"),
+    # Still available as a documented source candidate, but cannot block all
+    # other corroboration when ASEAN Secretariat denies automated readers.
     ("https://asean.org/the-founding-of-asean/",
      "ASEAN Secretariat: The Founding of ASEAN",
      "official"),
-    ("https://asean.mfa.go.th/en/page/62206-the-birth-of-asean",
-     "Thai MFA ASEAN office: Birth of ASEAN",
-     "government"),
-    ("https://www.mfa.gov.sg/about-mfa/foreign-policy/international-organisations/association-of-southeast-asian-nations-asean/",
-     "Singapore MFA: Association of Southeast Asian Nations (ASEAN)",
-     "government"),
 )
 ASEAN_GENERAL = (
     ("https://asean.org/about-asean/",
@@ -43,17 +48,6 @@ def reviewed_candidates(question: str, uncovered: list[str]) -> list[dict]:
     selected = []
     if "IPCC" in uncovered and re.search(r"\b(?:sea\s+level|paras\s+laut)\b", q):
         selected.append({
-            "provider": "IPCC Data Distribution Centre (Columbia-hosted; not full IPCC report)",
-            "title": "IPCC AR6 sea-level observations and projections (DDC Figure 3.4)",
-            "url": IPCC_DDC_SEA_LEVEL,
-            "snippet": "",
-            "published": "",
-            "recovery_for": ["IPCC"],
-            "source_tier": "delegated_official",
-            "source_scope": "IPCC_DDC_DATA_ONLY",
-        })
-    if "IPCC" in uncovered and re.search(r"\b(?:sea\s+level|paras\s+laut)\b", q):
-        selected.append({
             "provider": "NASA Sea Level IPCC AR6 projection data (delegated; not IPCC report)",
             "title": "NASA: IPCC AR6 Sea Level Projection Tool",
             "url": IPCC_AR6_NASA_TOOL,
@@ -61,6 +55,16 @@ def reviewed_candidates(question: str, uncovered: list[str]) -> list[dict]:
             "recovery_for": ["IPCC"],
             "source_tier": "delegated_official",
             "source_scope": "IPCC_AR6_NASA_DATA_ONLY",
+        })
+        # Keep a second reviewed data source as fallback if NASA is unavailable.
+        selected.append({
+            "provider": "IPCC Data Distribution Centre (Columbia-hosted; not full IPCC report)",
+            "title": "IPCC AR6 sea-level observations and projections (DDC Figure 3.4)",
+            "url": IPCC_DDC_SEA_LEVEL,
+            "snippet": "", "published": "",
+            "recovery_for": ["IPCC"],
+            "source_tier": "delegated_official",
+            "source_scope": "IPCC_DDC_DATA_ONLY",
         })
     if "ASEAN" in uncovered:
         if re.search(r"\b(?:sejarah|history|founding|foundation|establish(?:ment|ed)?|"
@@ -72,12 +76,12 @@ def reviewed_candidates(question: str, uncovered: list[str]) -> list[dict]:
             selected.append({
                 "provider": ("ASEAN Secretariat official reference"
                              if tier == "official" else
-                             "ASEAN founding background from government signatory"),
+                             "ASEAN founding history from government signatory"),
                 "title": title,
                 "url": url,
                 "snippet": "",
                 "published": "",
-                "recovery_for": ["ASEAN"] if tier == "official" else [],
+                "recovery_for": ["ASEAN"],
                 "source_tier": tier,
                 "source_scope": "ASEAN_BACKGROUND",
             })
