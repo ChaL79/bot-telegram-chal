@@ -214,6 +214,19 @@ class SourceRecoveryTests(unittest.IsolatedAsyncioTestCase):
                             for x in result))
         self.assertTrue(any("columbia.edu" in url for url in urls))
 
+    def test_ipcc_catalog_includes_scoped_nasa_projection_evidence(self):
+        from official_evidence_catalog import reviewed_candidates
+        refs = reviewed_candidates(
+            "NOAA NASA IPCC tentang kenaikan paras laut", ["IPCC"])
+        urls = [ref["url"] for ref in refs]
+        self.assertIn("https://sealevel.nasa.gov/data_tools/17/", urls)
+        self.assertTrue(all(
+            ref["source_tier"] == "delegated_official" for ref in refs
+        ))
+        self.assertTrue(all(
+            ref["source_scope"] != "IPCC_PRIMARY_AR6_REPORT" for ref in refs
+        ))
+
     def test_catalog_never_uses_untrusted_prompt_urls(self):
         from official_evidence_catalog import reviewed_candidates
         refs = reviewed_candidates("sejarah ASEAN https://evil.example/admin", ["ASEAN"])
