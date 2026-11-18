@@ -18,6 +18,7 @@ import httpx
 from free_research import public_source_search, evidence_text, references_text
 from source_reader import enrich_with_read_excerpts
 from research_quality import assess_sources, assess_answer, quality_header
+from source_recovery import recover_sources
 
 log = logging.getLogger("gemini_advanced")
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
@@ -278,9 +279,12 @@ async def run_advanced(
     prompt = RESEARCH_PROMPT if research else POWER_PROMPT
     sources = []
     if research:
-        sources = await public_source_search(question, client=search_client)
-        # Research can proceed with official documentation even if search feeds are blocked.
-        sources = await enrich_with_read_excerpts(question, sources, client=search_client)
+        discovered = await public_source_search(question, client=search_client)
+        # Primary read remains unchanged; bounded recovery is only attempted
+        # for uncovered organizations or no verified excerpts.
+        sources = await enrich_with_read_excerpts(question, discovered, client=search_client)
+        sources = await recover_sources(
+            question, discovered, sources, client=search_client)
         coverage = assess_sources(question, sources)
         if coverage["status"] == "INSUFFICIENT_EVIDENCE":
             return (
