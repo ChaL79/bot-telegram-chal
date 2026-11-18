@@ -55,7 +55,21 @@ async def inspect_case(name: str, question: str) -> dict:
             {"host": urlsplit(s.get("url", "")).hostname or "",
              "status": s.get("read_status", "search_metadata_only"),
              "tier": s.get("source_tier", "initial"),
+             "scope": s.get("source_scope", ""),
              "recovered_for": s.get("recovery_for", []),
+             # These come only from actual verified excerpts, never metadata.
+             "supports_ipcc_ar6_sea_level": (
+                 is_verified(s)
+                 and all(x in str(s.get("excerpt", "")).casefold()
+                         for x in ("ipcc", "sea level", "ar6"))
+             ),
+             "supports_asean_founding_1967": (
+                 is_verified(s)
+                 and "asean" in str(s.get("excerpt", "")).casefold()
+                 and "1967" in str(s.get("excerpt", ""))
+                 and any(x in str(s.get("excerpt", "")).casefold()
+                         for x in ("found", "establish", "bangkok"))
+             ),
              "title": str(s.get("title", ""))[:80]}
             for s in final
         ],
