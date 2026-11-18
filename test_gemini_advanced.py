@@ -289,6 +289,64 @@ class AdvancedTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(ok)
         self.assertIn("tidak akan meneka", answer)
 
+    async def test_hallucinated_citation_blocks_gemini_narrative(self):
+        from unittest.mock import patch
+        refs = [{
+            "title": "NASA climate", "url": "https://science.nasa.gov/climate-change/",
+            "provider": "NASA", "published": "",
+            "read_status": "verified_page_excerpt",
+            "excerpt": "NASA studies changes in global climate and sea level."
+        }]
+        def answer(req):
+            return httpx.Response(200, json={"candidates": [{
+                "content": {"parts": [{"text":
+                    "NASA confirms unknown fabricated evidence [8]."}]}
+            }]})
+        with patch("gemini_advanced.public_source_search", return_value=refs):
+            with patch("gemini_advanced.enrich_with_read_excerpts", return_value=refs):
+                async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as cli:
+                    text, ok = await run_advanced("NASA climate sea level", "TEST_KEY",
+                                                  "deepdive", client=cli)
+        self.assertFalse(ok)
+        self.assertIn("BUKAN analisis Gemini", text)
+        self.assertNotIn("unknown fabricated evidence", text)
+        self.assertIn("rujukan", text)
+
+    async def test_hallucinated_number_blocks_gemini_narrative(self):
+        from unittest.mock import patch
+        refs = [{
+            "title": "Official cost", "url": "https://ollama.com/pricing",
+            "provider": "Ollama", "published": "",
+            "read_status": "verified_page_excerpt",
+            "excerpt": "Ollama Cloud Pro costs $20/month."
+        }]
+        def answer(req):
+            return httpx.Response(200, json={"candidates": [{
+                "content": {"parts": [{"text":
+                    "Pro costs US$987/month [1]."}]}
+            }]})
+        with patch("gemini_advanced.public_source_search", return_value=refs):
+            with patch("gemini_advanced.enrich_with_read_excerpts", return_value=refs):
+                async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as cli:
+                    text, ok = await run_advanced("Ollama pricing", "TEST_KEY",
+                                                  "deepdive", client=cli)
+        self.assertFalse(ok)
+        self.assertIn("BUKAN analisis Gemini", text)
+        self.assertNotIn("US$987", text)
+        self.assertIn("$20/month", text)
+
+    def test_fallback_classifies_unavailable_vs_metadata_properly(self):
+        from gemini_advanced import research_fallback
+        sources = [
+            {"title": "Site blocked", "url": "https://example.org/one",
+             "read_status": "page_unavailable"},
+            {"title": "Search hit", "url": "https://example.org/two",
+             "read_status": "search_metadata_only"},
+        ]
+        result = research_fallback(sources, "test")
+        self.assertIn("Halaman gagal dibaca", result)
+        self.assertIn("halaman belum dibaca", result)
+
     async def test_429_no_retry(self):
         count = 0
         def mock(req):
