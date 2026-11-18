@@ -17,6 +17,7 @@ import httpx
 from free_research import public_source_search, search_query_terms
 from public_article_reader import read_public_html, safe_public_article_url
 from research_quality import assess_sources, requested_organizations, source_on_domains
+from official_evidence_catalog import reviewed_candidates
 from source_reader import MainText, BoundedBodyText, select_relevant_excerpt
 
 log = logging.getLogger("source_recovery")
@@ -155,7 +156,9 @@ async def _read_recovery_ref(
                                  re.IGNORECASE)
                        for name in ref.get("recovery_for", [])):
                 return failed
-        label = ("Targeted recovery: verified first-party article"
+        label = ("Targeted recovery: verified IPCC DDC dataset description (not AR6 report)"
+                 if ref.get("source_tier") == "delegated_official" else
+                 "Targeted recovery: verified first-party article"
                  if ref.get("source_tier") == "official" else
                  "Targeted recovery: verified secondary article (not primary)"
                  if ref.get("source_tier") == "secondary" else
@@ -209,6 +212,24 @@ async def recover_sources(
     if not missing and status["verified_count"]:
         return initial
     candidates = _discovered_candidates(question, discovered, initial, missing)
+    # Reviewed institutional pages enter only through the same DNS-pinned HTML
+    # reader as public-search results. A catalog entry is never verified by fiat.
+    attempted = {s.get("url") for s in initial}
+    known_bad_hosts = {urlsplit(s["url"]).hostname
+                       for s in initial
+                       if s.get("read_status") == "page_unavailable"
+                       and safe_public_article_url(s.get("url", ""))}
+    reviewed = [
+        entry for entry in reviewed_candidates(question, missing)
+        if entry["url"] not in attempted
+        and urlsplit(entry["url"]).hostname not in known_bad_hosts
+    ]
+    # Prefer scoped primary references; delegated IPCC datasets are not the
+    # same as the primary assessment report and cannot fill official coverage.
+    candidates = reviewed + [
+        candidate for candidate in candidates
+        if candidate["url"] not in {ref["url"] for ref in reviewed}
+    ]
     # One targeted search when the named official organization remains
     # uncovered, OR a general research question had zero viable candidates.
     # No broad discovery loops, no paid APIs and no repeat of failed hosts.
@@ -217,6 +238,8 @@ async def recover_sources(
             x.get("source_tier") == "official" for x in candidates))
         or (not missing and not candidates)
     )
+    if reviewed:
+        needs_search = False
     if needs_search and _scoped_query(question, missing):
         try:
             extra = await asyncio.wait_for(
@@ -226,9 +249,13 @@ async def recover_sources(
             )
         except (asyncio.TimeoutError, httpx.HTTPError, ValueError):
             extra = []
-        candidates = _discovered_candidates(
+        discovered_again = _discovered_candidates(
             question, discovered + extra, initial, missing
         )
+        candidates = reviewed + [
+            candidate for candidate in discovered_again
+            if candidate["url"] not in {ref["url"] for ref in reviewed}
+        ]
 
     attempts = candidates[:MAX_RECOVERY_READS]
     if not attempts:
