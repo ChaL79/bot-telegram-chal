@@ -7,6 +7,7 @@ Commands:
               explicitly unverified rather than invented.
 No paid-tier activation, retries, or user-supplied arbitrary URL fetching.
 """
+import asyncio
 import datetime as dt
 import logging
 import re
@@ -17,6 +18,8 @@ from typing import Optional
 import httpx
 from free_research import public_source_search, evidence_text, references_text
 from source_reader import enrich_with_read_excerpts
+from research_quality import assess_sources, assess_answer, quality_header
+from source_recovery import recover_sources
 
 log = logging.getLogger("gemini_advanced")
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
@@ -30,6 +33,8 @@ MAX_INPUT_CHARS = 3200
 # High thinking may need substantially more inference time than minimal.
 # Keep exactly ONE Gemini request and preserve a finite timeout.
 GEMINI_READ_TIMEOUT = {"power": 70.0, "deepdive": 85.0}
+# Bound search + first reads + recovery to leave headroom under bot.py 110s.
+RESEARCH_FETCH_TIMEOUT = 20.0
 # Includes hidden thinking tokens; too-small caps can produce no visible answer.
 # Do not configure a paid model or automatically retry on quota/timeout.
 GEMINI_MAX_OUTPUT_TOKENS = {"power": 6144, "deepdive": 8192}
@@ -53,6 +58,12 @@ RESEARCH_PROMPT = (
     "Jangan mendakwa telah membaca halaman penuh atau memeriksa fakta menyeluruh. "
     "Bezakan fakta terhad, inferens dan perkara yang belum disahkan. "
     "Jika sumber tidak cukup, nyatakan dengan jelas. "
+    "Sumber delegated_official seperti data IPCC melalui NASA hanya membuktikan "
+    "skop data yang dibaca, BUKAN kandungan laporan penuh IPCC. "
+    "Sumber founding_government ialah rekod kerajaan negara pengasas, "
+    "BUKAN bukti bahawa laman Sekretariat ASEAN telah dibaca. "
+    "Jangan mengubah status PARTIAL menjadi PASS jika sumber asal tidak dibaca. "
+
     "Utamakan sumber rasmi apabila tersedia; gunakan sumber penerbitan dan "
     "akademik yang relevan sebagai sokongan apabila sumber rasmi tiada. "
     "Bagi berita dan maklumat terkini, semak tarikh penerbitan dan peristiwa. "
@@ -229,8 +240,12 @@ def research_fallback(sources: list[dict], reason: str) -> str:
     This is deterministic raw evidence, NOT an AI-generated research conclusion.
     Only fetched excerpts may be quoted as read; search metadata is not proof.
     """
+    rejected = reason == "rujukan atau angka dalam analisis belum disahkan"
     lines = [
-        "⚠️ Gemini tidak dapat menghasilkan analisis sekarang (" + reason + ").",
+        ("⚠️ Analisis Gemini ditolak oleh semakan bukti; "
+         "rujukan atau angka belum disahkan."
+         if rejected else
+         "⚠️ Gemini tidak dapat menghasilkan analisis sekarang (" + reason + ")."),
         "Carian sumber telah dibuat, tetapi jawapan berikut BUKAN analisis Gemini.",
         "Sumber yang diperoleh (petikan/metadata, bukan semakan artikel penuh):",
     ]
@@ -240,8 +255,12 @@ def research_fallback(sources: list[dict], reason: str) -> str:
         if source.get("read_status") == "verified_page_excerpt" and source.get("excerpt"):
             label = "Petikan halaman diambil"
             lines.append(f"[{i}] {title} [{label}]\n{url}")
+        elif source.get("read_status") == "page_unavailable":
+            lines.append(f"[{i}] {title} [Halaman gagal dibaca; bukan bukti]\n{url}")
+        elif source.get("read_status") == "source_not_found":
+            lines.append(f"[{i}] {title} [Sumber rasmi tidak ditemui; URL belum disahkan]\n{url}")
         else:
-            lines.append(f"[{i}] {title} [Metadata carian sahaja]\n{url}")
+            lines.append(f"[{i}] {title} [Metadata carian sahaja; halaman belum dibaca]\n{url}")
     quotes = verified_source_quotes(sources[:5])
     if quotes:
         lines.append(quotes)
@@ -277,15 +296,31 @@ async def run_advanced(
     prompt = RESEARCH_PROMPT if research else POWER_PROMPT
     sources = []
     if research:
-        sources = await public_source_search(question, client=search_client)
-        # Research can proceed with official documentation even if search feeds are blocked.
-        sources = await enrich_with_read_excerpts(question, sources, client=search_client)
-        if not sources:
+        async def collect_sources() -> list[dict]:
+            discovered = await public_source_search(question, client=search_client)
+            initial = await enrich_with_read_excerpts(
+                question, discovered, client=search_client)
+            return await recover_sources(
+                question, discovered, initial, client=search_client)
+
+        try:
+            sources = await asyncio.wait_for(
+                collect_sources(), timeout=RESEARCH_FETCH_TIMEOUT)
+        except asyncio.TimeoutError:
             return (
-                "Carian sumber awam tidak menemui bukti yang relevan dan boleh "
-                "disahkan. Saya tidak akan meneka jawapan atau mereka rujukan. "
-                "Cuba sebut lokasi, tempoh, atau nama topik dengan lebih khusus. "
-                "Untuk penjelasan umum tanpa web, gunakan /gemini.",
+                "Research Quality Gate: INSUFFICIENT_EVIDENCE — "
+                "carian dan bacaan sumber melebihi had masa selamat. "
+                "Tiada panggilan Gemini dibuat; cuba soalan lebih khusus.",
+                False,
+            )
+        coverage = assess_sources(question, sources)
+        if coverage["status"] == "INSUFFICIENT_EVIDENCE":
+            return (
+                quality_header(coverage) + "\n\n"
+                "Carian hanya menemui metadata atau percubaan bacaan yang gagal. "
+                "Saya tidak akan meneka jawapan atau mereka rujukan. "
+                "Tiada analisis Gemini dijana daripada sumber yang belum dibaca. "
+                + references_text(sources),
                 False,
             )
     current_date = dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).strftime("%d %B %Y")
@@ -375,7 +410,22 @@ async def run_advanced(
         reference_text = references_text(sources)
         quote_text = verified_source_quotes(sources)
         narrative = suppress_model_quotes(answer)
+        quality = assess_answer(question, narrative, sources)
+        if quality["unsupported_citations"] or quality["unmatched_quantities"]:
+            # Model output can cite an unread page or invent numerical facts.
+            # A warning alone still republishes those claims to Telegram.
+            # Fail closed: return only deterministic source-status + copied
+            # excerpts, never this untrusted model narrative. No extra API call.
+            return (
+                # Redact unmatched values from warning text too: even a
+                # conspicuous warning can accidentally repeat fabricated price.
+                quality_header({**quality, "unmatched_quantities": []}) + "\n\n"
+                + research_fallback(
+                    sources, "rujukan atau angka dalam analisis belum disahkan"),
+                False,
+            )
         return (
+            quality_header(quality) + "\n\n"
             "Penyelidikan berdasarkan petikan halaman terpilih dan metadata carian. "
             "Tidak semestinya membaca artikel penuh:\n\n"
             + narrative[:max(1500, 10000 - len(reference_text) - len(quote_text))]

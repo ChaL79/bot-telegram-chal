@@ -17,6 +17,9 @@ class AdvancedTests(unittest.IsolatedAsyncioTestCase):
                   <link>https://docs.python.org/3/</link>
                   <description>Python reference</description></item></channel></rss>"""
                 return httpx.Response(200, content=xml)
+            if req.url.host == "docs.python.org":
+                return httpx.Response(200, headers={"Content-Type": "text/html"},
+                    content=b"<html><main><p>Python reference documentation describes Python programming and language syntax.</p></main></html>")
             return httpx.Response(404)
         def ai_mock(req):
             seen.append((str(req.url), json.loads(req.content)))
@@ -120,6 +123,9 @@ class AdvancedTests(unittest.IsolatedAsyncioTestCase):
                 <link>https://docs.python.org/3/library/asyncio-sync.html</link>
                 <description>Python asyncio semaphore documentation</description>
                 </item></channel></rss>""")
+            if req.url.host == "docs.python.org":
+                return httpx.Response(200, headers={"Content-Type": "text/html"},
+                    content=b"<html><main><p>Python asyncio semaphore synchronization manages concurrent tasks using asynchronous primitives.</p></main></html>")
             return httpx.Response(403)
         def api_mock(req):
             calls.append(str(req.url))
@@ -135,6 +141,29 @@ class AdvancedTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("BUKAN analisis Gemini", answer)
         self.assertEqual(GEMINI_READ_TIMEOUT["deepdive"], 85.0)
         self.assertEqual(GEMINI_READ_TIMEOUT["power"], 70.0)
+
+    async def test_slow_source_collection_times_out_before_gemini(self):
+        import asyncio
+        from unittest.mock import patch
+        def api_mock(req):
+            self.fail("Gemini API must never be called after source timeout")
+        async def stalled_search(*args, **kwargs):
+            await asyncio.sleep(0.1)
+            return []
+        with patch("gemini_advanced.RESEARCH_FETCH_TIMEOUT", 0.001):
+            with patch("gemini_advanced.public_source_search",
+                       side_effect=stalled_search):
+                async with httpx.AsyncClient(
+                    transport=httpx.MockTransport(api_mock)) as client:
+                    answer, ok = await run_advanced(
+                        "ASEAN history", "TEST_KEY", "deepdive", client=client)
+        self.assertFalse(ok)
+        self.assertIn("Tiada panggilan Gemini dibuat", answer)
+
+    def test_research_timeout_budget_less_than_telegram_handler_limit(self):
+        from gemini_advanced import (RESEARCH_FETCH_TIMEOUT, GEMINI_READ_TIMEOUT)
+        self.assertLess(RESEARCH_FETCH_TIMEOUT + GEMINI_READ_TIMEOUT["deepdive"],
+                        110)
 
     async def test_power_single_network_failure_no_retry(self):
         calls = []
@@ -238,7 +267,8 @@ class AdvancedTests(unittest.IsolatedAsyncioTestCase):
         from unittest.mock import patch
         refs = [{"title": "Public study", "provider": "Open web",
                  "url": "https://example.org/study",
-                 "read_status": "search_metadata_only", "published": ""}]
+                 "read_status": "verified_page_excerpt",
+                 "excerpt": "This public study examines evidence and science.", "published": ""}]
         def mock(req):
             return httpx.Response(200, json={"candidates": [
                 {"content": {"parts": [
@@ -281,6 +311,64 @@ class AdvancedTests(unittest.IsolatedAsyncioTestCase):
                                                 client=client, search_client=search_client)
         self.assertFalse(ok)
         self.assertIn("tidak akan meneka", answer)
+
+    async def test_hallucinated_citation_blocks_gemini_narrative(self):
+        from unittest.mock import patch
+        refs = [{
+            "title": "NASA climate", "url": "https://science.nasa.gov/climate-change/",
+            "provider": "NASA", "published": "",
+            "read_status": "verified_page_excerpt",
+            "excerpt": "NASA studies changes in global climate and sea level."
+        }]
+        def answer(req):
+            return httpx.Response(200, json={"candidates": [{
+                "content": {"parts": [{"text":
+                    "NASA confirms unknown fabricated evidence [8]."}]}
+            }]})
+        with patch("gemini_advanced.public_source_search", return_value=refs):
+            with patch("gemini_advanced.enrich_with_read_excerpts", return_value=refs):
+                async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as cli:
+                    text, ok = await run_advanced("NASA climate sea level", "TEST_KEY",
+                                                  "deepdive", client=cli)
+        self.assertFalse(ok)
+        self.assertIn("BUKAN analisis Gemini", text)
+        self.assertNotIn("unknown fabricated evidence", text)
+        self.assertIn("rujukan", text)
+
+    async def test_hallucinated_number_blocks_gemini_narrative(self):
+        from unittest.mock import patch
+        refs = [{
+            "title": "Official cost", "url": "https://ollama.com/pricing",
+            "provider": "Ollama", "published": "",
+            "read_status": "verified_page_excerpt",
+            "excerpt": "Ollama Cloud Pro plan costs $20/month with additional model hosting support."
+        }]
+        def answer(req):
+            return httpx.Response(200, json={"candidates": [{
+                "content": {"parts": [{"text":
+                    "Pro costs US$987/month [1]."}]}
+            }]})
+        with patch("gemini_advanced.public_source_search", return_value=refs):
+            with patch("gemini_advanced.enrich_with_read_excerpts", return_value=refs):
+                async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as cli:
+                    text, ok = await run_advanced("Ollama pricing", "TEST_KEY",
+                                                  "deepdive", client=cli)
+        self.assertFalse(ok)
+        self.assertIn("BUKAN analisis Gemini", text)
+        self.assertNotIn("US$987", text)
+        self.assertIn("$20/month", text)
+
+    def test_fallback_classifies_unavailable_vs_metadata_properly(self):
+        from gemini_advanced import research_fallback
+        sources = [
+            {"title": "Site blocked", "url": "https://example.org/one",
+             "read_status": "page_unavailable"},
+            {"title": "Search hit", "url": "https://example.org/two",
+             "read_status": "search_metadata_only"},
+        ]
+        result = research_fallback(sources, "test")
+        self.assertIn("Halaman gagal dibaca", result)
+        self.assertIn("halaman belum dibaca", result)
 
     async def test_429_no_retry(self):
         count = 0

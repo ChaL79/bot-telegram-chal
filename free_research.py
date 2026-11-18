@@ -1102,6 +1102,17 @@ def evidence_text(sources: list[dict]) -> str:
             "URL: " + (source.get("url") or "None discovered"),
             "Evidence type: " + evidence_type,
         ]
+        scope = source.get("source_scope", "")
+        tier = source.get("source_tier", "")
+        if scope == "IPCC_AR6_NASA_DATA_ONLY":
+            parts.append("PROVENANCE LIMIT: NASA-hosted IPCC AR6 sea-level projection DATA ONLY. "
+                         "Not the full original IPCC assessment report; do not say IPCC.ch was read.")
+        elif scope == "IPCC_DDC_DATA_ONLY":
+            parts.append("PROVENANCE LIMIT: IPCC data-catalog description ONLY. "
+                         "Not the full original IPCC assessment report.")
+        elif scope == "ASEAN_BACKGROUND" and tier == "founding_government":
+            parts.append("PROVENANCE LIMIT: Historical account of an ASEAN founding government. "
+                         "Not the ASEAN Secretariat's original website.")
         if read:
             parts.append("Untrusted page excerpt: " + clean(source["excerpt"], 2400))
         elif status == "page_unavailable":
@@ -1116,6 +1127,18 @@ def evidence_text(sources: list[dict]) -> str:
     return "\n\n".join(chunks)
 
 
+def _reference_scope(source: dict) -> str:
+    """Expose source limitations without changing verification status."""
+    scope = source.get("source_scope")
+    if scope == "IPCC_AR6_NASA_DATA_ONLY":
+        return " [Data IPCC AR6 melalui NASA; bukan laporan IPCC asal]"
+    if scope == "IPCC_DDC_DATA_ONLY":
+        return " [Katalog data IPCC; bukan laporan penuh]"
+    if scope == "ASEAN_BACKGROUND" and source.get("source_tier") == "founding_government":
+        return " [Sejarah kerajaan negara pengasas; bukan laman Sekretariat ASEAN]"
+    return ""
+
+
 def references_text(sources: list[dict]) -> str:
     return "\n\nSenarai sumber (petikan terpilih atau metadata; bukan semakan artikel penuh):\n" + "\n".join(
         f"[{i}] {clean(source['title'], 95)} "
@@ -1125,6 +1148,7 @@ def references_text(sources: list[dict]) -> str:
             ("[Sumber rasmi tidak ditemui; belum dicuba]"
              if source.get("read_status") == "source_not_found"
              else "[Metadata sahaja; belum dibaca]")))
+        + _reference_scope(source)
         + f"\n{source.get('url') or 'URL rasmi tidak ditemui dalam carian'}"
         for i, source in enumerate(sources[:MAX_SOURCES], start=1)
     )

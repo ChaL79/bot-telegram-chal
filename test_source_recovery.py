@@ -1,0 +1,281 @@
+"""Offline regression tests for targeted recovery and source provenance."""
+import unittest
+from unittest.mock import patch
+
+import httpx
+
+from research_quality import assess_sources
+from source_recovery import (
+    _discovered_candidates, _scoped_query, recover_sources,
+)
+
+
+def ref(url, title, status, excerpt=None):
+    out = {"url": url, "title": title, "snippet": title, "provider": "Test",
+           "published": "", "read_status": status}
+    if excerpt is not None:
+        out["excerpt"] = excerpt
+    return out
+
+
+def page(text):
+    return ("<html><main><article><h1>Scientific review</h1><p>" +
+            text + "</p></article></main></html>").encode()
+
+
+class SourceRecoveryTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        # CI safety regressions disable general reading globally. These tests
+        # explicitly opt in under mocked transports, never the live network.
+        self._reader_flag = patch.dict(
+            "os.environ", {"ENABLE_GENERAL_PUBLIC_READER": "1"})
+        self._reader_flag.start()
+        self.addCleanup(self._reader_flag.stop)
+
+    async def test_missing_nasa_recovers_distinct_official_hostname(self):
+        question = "Bandingkan NOAA NASA IPCC sea level rise projection uncertainty"
+        existing = [
+            ref("https://www.climate.gov/news/sea-level", "NOAA", "verified_page_excerpt",
+                "Sea level rise from land ice and thermal expansion."),
+            ref("https://science.nasa.gov/climate/sea-level", "NASA", "page_unavailable"),
+            ref("https://www.ipcc.ch/report/ar6", "IPCC", "verified_page_excerpt",
+                "IPCC sea level rise projection uncertainty scenarios and impacts."),
+        ]
+        discovery = [ref(
+            "https://sealevel.nasa.gov/faq/12/what-causes-sea-level-rise/",
+            "NASA sea level rise projection uncertainty", "search_metadata_only")]
+        requests = []
+        def mock(request):
+            requests.append(str(request.url))
+            return httpx.Response(200, headers={"content-type": "text/html"},
+                content=page(
+                    "NASA sea level rise projection uncertainty reflects ice sheet "
+                    "changes and future global temperature scenarios, with a "
+                    "likely range of coastal sea level changes."
+                ))
+        async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as client:
+            with patch("source_recovery.public_source_search") as search:
+                result = await recover_sources(question, discovery, existing, client=client)
+        self.assertEqual(search.await_count, 0)
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(assess_sources(question, result)["status"], "PASS")
+        self.assertEqual(result[2]["source_tier"], "official")
+        self.assertEqual(result[2]["read_status"], "verified_page_excerpt")
+
+    async def test_recovery_never_retries_failed_host(self):
+        question = "NOAA NASA IPCC sea level rise"
+        initial = [ref("https://www.ipcc.ch/report/", "IPCC", "page_unavailable"),
+                   ref("https://www.noaa.gov/sea/level", "NOAA", "verified_page_excerpt",
+                       "Sea level rise from global ocean warming.")]
+        discovered = [ref("https://www.ipcc.ch/report/new/", "IPCC sea level rise",
+                          "search_metadata_only")]
+        def no_http(req):
+            self.fail("Denied host should not be retried")
+        async with httpx.AsyncClient(transport=httpx.MockTransport(no_http)) as client:
+            with patch("source_recovery.reviewed_candidates", return_value=[]):
+                with patch("source_recovery.public_source_search", return_value=[]) as search:
+                    result = await recover_sources(question, discovered, initial, client=client)
+        self.assertEqual(len(result), len(initial))
+        self.assertEqual(search.await_count, 1)
+
+    async def test_secondary_evidence_does_not_claim_ipcc_coverage(self):
+        question = "NOAA IPCC sea level rise projection"
+        initial = [ref("https://www.noaa.gov/sea/level", "NOAA", "verified_page_excerpt",
+                       "Sea level rise is influenced by warming."),
+                   ref("https://www.ipcc.ch/report/", "IPCC", "page_unavailable")]
+        discovered = [ref("https://example.org/science/ipcc-sea-level-rise-projection",
+                          "Analysis of IPCC sea level rise projection", "search_metadata_only")]
+        def mock(request):
+            return httpx.Response(200, headers={"content-type": "text/html"},
+                content=page("Independent analysis discusses IPCC sea level rise projection "
+                             "scenarios and scientific uncertainties. Additional sea level "
+                             "projection research considers polar ice changes."))
+        async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as client:
+            # Isolate the classification of a third-party search result from
+            # first-party/delegated catalog sources for this unit test.
+            with patch("source_recovery.reviewed_candidates", return_value=[]):
+                with patch("source_recovery.public_source_search", return_value=[]):
+                    result = await recover_sources(question, discovered, initial, client=client)
+        self.assertEqual(assess_sources(question, result)["status"], "PARTIAL")
+        self.assertTrue(any(s.get("source_tier") == "secondary" and
+                            s.get("read_status") == "verified_page_excerpt"
+                            for s in result))
+
+    async def test_unrelated_or_unreadable_content_not_promoted(self):
+        question = "NOAA IPCC sea level rise"
+        initial = [ref("https://www.noaa.gov/sea/level", "NOAA", "verified_page_excerpt",
+                       "Global sea level rise from warming."),
+                   ref("https://www.ipcc.ch/report/", "IPCC", "page_unavailable")]
+        discovered = [ref("https://example.org/ipcc/sea-level-rise",
+                          "IPCC sea level rise", "search_metadata_only")]
+        def mock(request):
+            return httpx.Response(200, headers={"content-type": "text/html"},
+                                  content=page("This page discusses an unrelated subject "
+                                               "and has no scientific measurements available."))
+        async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as client:
+            with patch("source_recovery.public_source_search", return_value=[]):
+                result = await recover_sources(question, discovered, initial, client=client)
+        self.assertFalse(any(s.get("read_status") == "verified_page_excerpt" and
+                             s.get("source_tier") == "secondary" for s in result))
+        self.assertEqual(assess_sources(question, result)["status"], "PARTIAL")
+
+    async def test_only_two_additional_reads_no_unsafe_url(self):
+        question = "IPCC sea level rise projection"
+        initial = [ref("https://www.ipcc.ch/report/", "IPCC", "page_unavailable")]
+        discovered = [
+            ref(f"https://example{i}.org/science/ipcc-sea-level-rise-projection",
+                "IPCC sea level rise projection", "search_metadata_only")
+            for i in range(7)]
+        discovered.append(ref("http://127.0.0.1/admin", "IPCC sea level rise",
+                              "search_metadata_only"))
+        count = []
+        def mock(req):
+            count.append(str(req.url))
+            return httpx.Response(403)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as client:
+            # Verify the generic two-page cap independently of reviewed
+            # institution-specific catalog fallbacks.
+            with patch("source_recovery.reviewed_candidates", return_value=[]):
+                with patch("source_recovery.public_source_search", return_value=[]):
+                    result = await recover_sources(question, discovered, initial, client=client)
+        self.assertEqual(len(count), 2)
+        self.assertTrue(all(url.startswith("https://example") for url in count))
+        self.assertFalse(any(s.get("read_status") == "verified_page_excerpt" for s in result))
+
+    async def test_general_history_zero_results_gets_one_bounded_search(self):
+        question = "Jelaskan sejarah pembentukan empayar Majapahit dan tujuan penubuhannya."
+        source = ref("https://history.example.org/history/majapahit-foundation",
+                     "History of Majapahit founding and regional cooperation",
+                     "search_metadata_only")
+        seen = []
+        async def search(query, **kwargs):
+            seen.append(query)
+            return [source]
+        def mock(request):
+            return httpx.Response(200, headers={"content-type": "text/html"},
+                content=page("Majapahit history documents the foundation of a regional "
+                             "empire in Southeast Asia, and Majapahit founding "
+                             "chronicles explain early dynastic political collaboration."))
+        async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as client:
+            with patch("source_recovery.public_source_search", side_effect=search):
+                result = await recover_sources(question, [], [], client=client)
+        self.assertEqual(len(seen), 1)
+        self.assertLess(len(seen[0]), 150)
+        self.assertEqual(assess_sources(question, result)["status"], "PASS")
+        self.assertTrue(any(s.get("read_status") == "verified_page_excerpt"
+                            for s in result))
+
+    async def test_general_history_no_results_fails_closed(self):
+        with patch("source_recovery.public_source_search", return_value=[]) as search:
+            result = await recover_sources("History of the Majapahit kingdom founding", [], [])
+        self.assertEqual(result, [])
+        self.assertEqual(search.await_count, 1)
+
+    async def test_asean_catalog_official_excerpt_promoted_when_read(self):
+        from official_evidence_catalog import reviewed_candidates
+        from source_recovery import _read_recovery_ref
+        question = "Jelaskan sejarah pembentukan ASEAN dan tujuan penubuhannya"
+        refs = reviewed_candidates(question, ["ASEAN"])
+        official = next(x for x in refs if x["source_tier"] == "official")
+        seen = []
+        async def fake_reader(url, client=None):
+            seen.append(url)
+            return ("<main><article><h1>The Founding of ASEAN</h1><p>"
+                    "ASEAN was founded in 1967 in Bangkok to establish "
+                    "regional economic cooperation, social progress and "
+                    "peace in Southeast Asia. The ASEAN founding nations "
+                    "agreed to cooperate through this regional organization."
+                    "</p></article></main>")
+        with patch("source_recovery.read_public_html", side_effect=fake_reader):
+            result = await _read_recovery_ref(question, official, None)
+        self.assertEqual(result["source_tier"], "official")
+        self.assertEqual(result["read_status"], "verified_page_excerpt")
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(assess_sources(question, [result])["status"], "PASS")
+
+    async def test_asean_founding_governments_are_read_as_independent_excerpts(self):
+        from official_evidence_catalog import reviewed_candidates
+        question = "Sejarah penubuhan ASEAN di Bangkok"
+        refs = reviewed_candidates(question, ["ASEAN"])
+        self.assertEqual([x["source_tier"] for x in refs[:2]],
+                         ["founding_government", "founding_government"])
+        async def fake_reader(url, client=None):
+            return ("<main><article><p>"
+                    "ASEAN was founded in 1967 in Bangkok to establish "
+                    "peaceful regional cooperation and economic growth "
+                    "among founding member governments."
+                    "</p></article></main>")
+        with patch("source_recovery.read_public_html", side_effect=fake_reader):
+            result = await recover_sources(question, [], [])
+        self.assertEqual(len([x for x in result
+                              if x["read_status"] == "verified_page_excerpt"]), 2)
+        self.assertEqual(assess_sources(question, result)["status"], "PARTIAL")
+
+    async def test_ipcc_delegated_dataset_is_not_full_official_coverage(self):
+        question = "Bandingkan NOAA dan IPCC sea level rise projections"
+        initial = [ref("https://www.climate.gov/news/sea-level", "NOAA",
+                       "verified_page_excerpt",
+                       "NOAA sea level rise projected from warming.")]
+        urls = []
+        async def fake_reader(url, client=None):
+            urls.append(url)
+            if url.startswith("https://ipcc-data.climate.columbia.edu/"):
+                return ("<main><article><h1>IPCC AR6 sea level rise</h1><p>"
+                        "IPCC AR6 sea level rise projected coastal changes "
+                        "under scenarios described in the IPCC synthesis report. "
+                        "This catalog record provides sea level rise data."
+                        "</p></article></main>")
+            return ""
+        with patch("source_recovery.read_public_html", side_effect=fake_reader):
+            with patch("source_recovery.public_source_search", return_value=[]):
+                result = await recover_sources(question, [], initial)
+        self.assertEqual(assess_sources(question, result)["status"], "PARTIAL")
+        self.assertTrue(any(x.get("source_tier") == "delegated_official"
+                            and x.get("read_status") == "verified_page_excerpt"
+                            for x in result))
+        self.assertTrue(any("columbia.edu" in url for url in urls))
+
+    def test_ipcc_catalog_includes_scoped_nasa_projection_evidence(self):
+        from official_evidence_catalog import reviewed_candidates
+        refs = reviewed_candidates(
+            "NOAA NASA IPCC tentang kenaikan paras laut", ["IPCC"])
+        urls = [ref["url"] for ref in refs]
+        self.assertIn("https://sealevel.nasa.gov/data_tools/17/", urls)
+        self.assertTrue(all(
+            ref["source_tier"] == "delegated_official" for ref in refs
+        ))
+        self.assertTrue(all(
+            ref["source_scope"] != "IPCC_PRIMARY_AR6_REPORT" for ref in refs
+        ))
+
+    def test_catalog_never_uses_untrusted_prompt_urls(self):
+        from official_evidence_catalog import reviewed_candidates
+        refs = reviewed_candidates("sejarah ASEAN https://evil.example/admin", ["ASEAN"])
+        self.assertTrue(refs)
+        self.assertTrue(all("evil.example" not in x["url"] for x in refs))
+
+    async def test_disable_flag_prevents_all_recovery(self):
+        initial = [ref("https://www.ipcc.ch/report", "IPCC", "page_unavailable")]
+        with patch.dict("os.environ", {"ENABLE_GENERAL_PUBLIC_READER": "0"}):
+            result = await recover_sources("IPCC sea level rise", [], initial)
+        self.assertIs(result, initial)
+
+    async def test_full_coverage_skips_network(self):
+        initial = [ref("https://www.ipcc.ch/report", "IPCC", "verified_page_excerpt",
+                       "IPCC sea level rise projections and uncertainty.")]
+        with patch("source_recovery.public_source_search") as search:
+            result = await recover_sources("IPCC sea level rise", [], initial)
+        self.assertIs(result, initial)
+        self.assertEqual(search.await_count, 0)
+
+    def test_rejects_spoof_domain_and_keeps_topic_anchors(self):
+        q = "IPCC sea level rise"
+        discovered = [ref("https://ipcc.ch.evil.example.org/sea-level-rise",
+                          "IPCC sea level rise", "search_metadata_only")]
+        out = _discovered_candidates(q, discovered, [], ["IPCC"])
+        self.assertEqual(out, [], "Lookalike domain must be rejected")
+        self.assertIn("IPCC", _scoped_query(q, ["IPCC"]))
+
+
+if __name__ == "__main__":
+    unittest.main()
