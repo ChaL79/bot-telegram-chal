@@ -225,6 +225,13 @@ def search_query_terms(request: str) -> list[str]:
     request = re.sub(r"^/(?:deepdive|power)\b\s*", "", request, flags=re.I)
     words = [MALAY_RESEARCH_TERMS.get(x, x) for x in _terms(request)
              if not x.isdecimal()]
+    # "Kekurangan tidur pekerja" is an occupational fatigue question even
+    # when the user never uses the word keletihan/fatigue. Add the conceptual
+    # anchor before ranking; do not make all generic sleep topics fatigue.
+    if ({"sleep", "lack"}.issubset(words)
+            and {"workers", "work", "offshore", "shift"} & set(words)
+            and "fatigue" not in words):
+        words.insert(0, "fatigue")
     anchors = []
     for word in words:
         if word in TOPIC_ANCHORS and word not in anchors:
