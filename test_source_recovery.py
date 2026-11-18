@@ -154,8 +154,7 @@ class SourceRecoveryTests(unittest.IsolatedAsyncioTestCase):
         discovered = [ref("https://ipcc.ch.evil.example.org/sea-level-rise",
                           "IPCC sea level rise", "search_metadata_only")]
         out = _discovered_candidates(q, discovered, [], ["IPCC"])
-        self.assertTrue(out)
-        self.assertEqual(out[0]["source_tier"], "secondary")
+        self.assertEqual(out, [], "Lookalike domain must be rejected")
         self.assertIn("IPCC", _scoped_query(q, ["IPCC"]))
 
 
