@@ -17,6 +17,8 @@ CANDIDATES = {
     "ASEAN_NEW_PORTAL": "https://asean.org/about-us/",
     "THAI_MFA_ASEAN": "https://asean.mfa.go.th/en/page/62206-the-birth-of-asean",
     "SINGAPORE_MFA_ASEAN": "https://www.mfa.gov.sg/about-mfa/foreign-policy/international-organisations/association-of-southeast-asian-nations-asean/",
+    "PHILIPPINES_ORIGINAL_DECLARATION": "https://elibrary.judiciary.gov.ph/thebookshelf/showdocs/36/10681",
+    "INDONESIA_MFA_FOUNDING": "https://kemlu.go.id/kebijakan/asean/sejarah-dan-latar-pembentukan-asean",
 }
 
 async def one(label, url):
