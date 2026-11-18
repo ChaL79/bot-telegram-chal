@@ -884,7 +884,7 @@ No content on data practices.
              "Cari dokumentasi rasmi CDC/NIOSH Amerika Syarikat dan HSE United Kingdom. "
              "Terangkan risiko kekurangan tidur, kerja syif malam serta keselamatan pekerjaan.")
         refs = requested_fatigue_official_refs(q, [])
-        self.assertEqual(len(refs), 2)
+        self.assertEqual(len(refs), 3)
         self.assertEqual({x["url"].split("/")[2] for x in refs},
                          {"www.cdc.gov", "www.hse.gov.uk"})
         read_urls = []
@@ -900,8 +900,8 @@ No content on data practices.
         with patch.dict("os.environ", {"ENABLE_GENERAL_PUBLIC_READER": "1"}):
             with patch("source_reader.read_public_html", side_effect=page):
                 evidence = await enrich_with_read_excerpts(q, [])
-        self.assertEqual(len(read_urls), 2)
-        self.assertEqual(len(evidence), 2)
+        self.assertEqual(len(read_urls), 3)
+        self.assertEqual(len(evidence), 3)
         self.assertTrue(all(x["read_status"] == "verified_page_excerpt" for x in evidence))
         self.assertIn("Workplace fatigue", evidence[0]["excerpt"])
         self.assertIn("Shift work", evidence[1]["excerpt"])
@@ -938,7 +938,7 @@ No content on data practices.
         with patch.dict("os.environ", {"ENABLE_GENERAL_PUBLIC_READER": "1"}):
             with patch("source_reader.read_public_html", side_effect=blocked):
                 result = await enrich_with_read_excerpts(q, [])
-        self.assertEqual(len(result), 2)
+        self.assertEqual(len(result), 3)
         self.assertTrue(all(x["read_status"] == "page_unavailable" for x in result))
 
     def test_ssd_secondary_reference_is_labeled_and_scoped(self):
