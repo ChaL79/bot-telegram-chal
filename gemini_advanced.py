@@ -393,7 +393,9 @@ async def run_advanced(
             # Fail closed: return only deterministic source-status + copied
             # excerpts, never this untrusted model narrative. No extra API call.
             return (
-                quality_header(quality) + "\n\n"
+                # Redact unmatched values from warning text too: even a
+                # conspicuous warning can accidentally repeat fabricated price.
+                quality_header({**quality, "unmatched_quantities": []}) + "\n\n"
                 + research_fallback(
                     sources, "rujukan atau angka dalam analisis belum disahkan"),
                 False,
