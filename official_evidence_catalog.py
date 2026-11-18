@@ -15,11 +15,15 @@ from public_article_reader import safe_public_article_url
 IPCC_DDC_SEA_LEVEL = (
     "https://ipcc-data.climate.columbia.edu/content/ipcc-ar6-syr-lr-figure-34"
 )
+IPCC_AR6_NASA_TOOL = "https://sealevel.nasa.gov/data_tools/17/"
 
 ASEAN_HISTORY = (
     ("https://asean.org/the-founding-of-asean/",
      "ASEAN Secretariat: The Founding of ASEAN",
      "official"),
+    ("https://asean.mfa.go.th/en/page/62206-the-birth-of-asean",
+     "Thai MFA ASEAN office: Birth of ASEAN",
+     "government"),
     ("https://www.mfa.gov.sg/about-mfa/foreign-policy/international-organisations/association-of-southeast-asian-nations-asean/",
      "Singapore MFA: Association of Southeast Asian Nations (ASEAN)",
      "government"),
@@ -47,6 +51,16 @@ def reviewed_candidates(question: str, uncovered: list[str]) -> list[dict]:
             "recovery_for": ["IPCC"],
             "source_tier": "delegated_official",
             "source_scope": "IPCC_DDC_DATA_ONLY",
+        })
+    if "IPCC" in uncovered and re.search(r"\\b(?:sea\\s+level|paras\\s+laut)\\b", q):
+        selected.append({
+            "provider": "NASA Sea Level IPCC AR6 projection data (delegated; not IPCC report)",
+            "title": "NASA: IPCC AR6 Sea Level Projection Tool",
+            "url": IPCC_AR6_NASA_TOOL,
+            "snippet": "", "published": "",
+            "recovery_for": ["IPCC"],
+            "source_tier": "delegated_official",
+            "source_scope": "IPCC_AR6_NASA_DATA_ONLY",
         })
     if "ASEAN" in uncovered:
         if re.search(r"\b(?:sejarah|history|founding|foundation|establish(?:ment|ed)?|"
