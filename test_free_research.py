@@ -150,6 +150,22 @@ class FreeResearchTests(unittest.IsolatedAsyncioTestCase):
                      "snippet":"Company profile"}
         self.assertEqual(source_relevance(unrelated, terms), 0)
 
+    def test_offshore_sleep_loss_triggers_occupational_fatigue_sources(self):
+        query = (
+            "Bandingkan kesan kekurangan tidur terhadap pekerja offshore "
+            "berdasarkan kajian CDC, NIOSH dan HSE. "
+            "Bezakan bukti saintifik, risiko serta cadangan praktikal."
+        )
+        terms = search_query_terms(query)
+        self.assertIn("fatigue", terms)
+        self.assertIn("sleep", terms)
+        self.assertIn("offshore", terms)
+        self.assertIn("cdc", terms)
+        self.assertIn("hse", terms)
+        self.assertNotIn("fatigue", search_query_terms(
+            "Terangkan kepentingan tidur untuk kanak-kanak"
+        ))
+
     def test_leo_geo_malay_query_keeps_orbits_ahead_of_generic_latency(self):
         q = ("/deepdive Bandingkan internet satelit LEO vs GEO untuk kapal offshore: "
              "latency, kelajuan, liputan, cuaca, dan handover.")
