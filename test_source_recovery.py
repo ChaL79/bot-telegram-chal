@@ -135,6 +135,35 @@ class SourceRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(url.startswith("https://example") for url in count))
         self.assertFalse(any(s.get("read_status") == "verified_page_excerpt" for s in result))
 
+    async def test_general_history_zero_results_gets_one_bounded_search(self):
+        question = "Jelaskan sejarah pembentukan ASEAN dan tujuan penubuhannya."
+        source = ref("https://history.example.org/history/asean-foundation",
+                     "History of ASEAN founding and regional cooperation",
+                     "search_metadata_only")
+        seen = []
+        async def search(query, **kwargs):
+            seen.append(query)
+            return [source]
+        def mock(request):
+            return httpx.Response(200, headers={"content-type": "text/html"},
+                content=page("ASEAN history documents the foundation of regional "
+                             "cooperation in Southeast Asia, and ASEAN founding "
+                             "agreements explain diplomatic and economic collaboration."))
+        async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as client:
+            with patch("source_recovery.public_source_search", side_effect=search):
+                result = await recover_sources(question, [], [], client=client)
+        self.assertEqual(len(seen), 1)
+        self.assertLess(len(seen[0]), 150)
+        self.assertEqual(assess_sources(question, result)["status"], "PASS")
+        self.assertTrue(any(s.get("read_status") == "verified_page_excerpt"
+                            for s in result))
+
+    async def test_general_history_no_results_fails_closed(self):
+        with patch("source_recovery.public_source_search", return_value=[]) as search:
+            result = await recover_sources("History of ASEAN founding", [], [])
+        self.assertEqual(result, [])
+        self.assertEqual(search.await_count, 1)
+
     async def test_disable_flag_prevents_all_recovery(self):
         initial = [ref("https://www.ipcc.ch/report", "IPCC", "page_unavailable")]
         with patch.dict("os.environ", {"ENABLE_GENERAL_PUBLIC_READER": "0"}):
