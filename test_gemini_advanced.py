@@ -17,6 +17,9 @@ class AdvancedTests(unittest.IsolatedAsyncioTestCase):
                   <link>https://docs.python.org/3/</link>
                   <description>Python reference</description></item></channel></rss>"""
                 return httpx.Response(200, content=xml)
+            if req.url.host == "docs.python.org":
+                return httpx.Response(200, headers={"Content-Type": "text/html"},
+                    content=b"<html><main><p>Python reference documentation describes Python programming and language syntax.</p></main></html>")
             return httpx.Response(404)
         def ai_mock(req):
             seen.append((str(req.url), json.loads(req.content)))
@@ -120,6 +123,9 @@ class AdvancedTests(unittest.IsolatedAsyncioTestCase):
                 <link>https://docs.python.org/3/library/asyncio-sync.html</link>
                 <description>Python asyncio semaphore documentation</description>
                 </item></channel></rss>""")
+            if req.url.host == "docs.python.org":
+                return httpx.Response(200, headers={"Content-Type": "text/html"},
+                    content=b"<html><main><p>Python asyncio semaphore synchronization manages concurrent tasks using asynchronous primitives.</p></main></html>")
             return httpx.Response(403)
         def api_mock(req):
             calls.append(str(req.url))
@@ -238,7 +244,8 @@ class AdvancedTests(unittest.IsolatedAsyncioTestCase):
         from unittest.mock import patch
         refs = [{"title": "Public study", "provider": "Open web",
                  "url": "https://example.org/study",
-                 "read_status": "search_metadata_only", "published": ""}]
+                 "read_status": "verified_page_excerpt",
+                 "excerpt": "This public study examines evidence and science.", "published": ""}]
         def mock(req):
             return httpx.Response(200, json={"candidates": [
                 {"content": {"parts": [
