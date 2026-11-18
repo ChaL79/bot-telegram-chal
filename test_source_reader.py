@@ -801,7 +801,9 @@ No content on data practices.
         self.assertEqual(results[0]["read_status"],"verified_page_excerpt")
         self.assertIn("thermal expansion",results[0]["excerpt"])
         self.assertTrue(all(x.get("read_status") != "verified_page_excerpt" for x in results[1:]))
-        self.assertEqual(len(results),3)
+        # Three curated agencies were attempted; two unrelated/discovered
+        # entries remain as truthful unread/failed metadata.
+        self.assertEqual(len(results), 5)
 
     async def test_wifi_named_official_sources_distinguish_missing_attempted_and_metadata(self):
         from unittest.mock import patch
