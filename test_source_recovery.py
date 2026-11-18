@@ -24,6 +24,14 @@ def page(text):
 
 
 class SourceRecoveryTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        # CI safety regressions disable general reading globally. These tests
+        # explicitly opt in under mocked transports, never the live network.
+        self._reader_flag = patch.dict(
+            "os.environ", {"ENABLE_GENERAL_PUBLIC_READER": "1"})
+        self._reader_flag.start()
+        self.addCleanup(self._reader_flag.stop)
+
     async def test_missing_nasa_recovers_distinct_official_hostname(self):
         question = "Bandingkan NOAA NASA IPCC sea level rise projection uncertainty"
         existing = [
