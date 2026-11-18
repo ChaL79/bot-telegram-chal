@@ -318,7 +318,7 @@ class AdvancedTests(unittest.IsolatedAsyncioTestCase):
             "title": "Official cost", "url": "https://ollama.com/pricing",
             "provider": "Ollama", "published": "",
             "read_status": "verified_page_excerpt",
-            "excerpt": "Ollama Cloud Pro costs $20/month."
+            "excerpt": "Ollama Cloud Pro plan costs $20/month with additional model hosting support."
         }]
         def answer(req):
             return httpx.Response(200, json={"candidates": [{
