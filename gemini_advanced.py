@@ -55,6 +55,12 @@ RESEARCH_PROMPT = (
     "Jangan mendakwa telah membaca halaman penuh atau memeriksa fakta menyeluruh. "
     "Bezakan fakta terhad, inferens dan perkara yang belum disahkan. "
     "Jika sumber tidak cukup, nyatakan dengan jelas. "
+    "Sumber delegated_official seperti data IPCC melalui NASA hanya membuktikan "
+    "skop data yang dibaca, BUKAN kandungan laporan penuh IPCC. "
+    "Sumber founding_government ialah rekod kerajaan negara pengasas, "
+    "BUKAN bukti bahawa laman Sekretariat ASEAN telah dibaca. "
+    "Jangan mengubah status PARTIAL menjadi PASS jika sumber asal tidak dibaca. "
+
     "Utamakan sumber rasmi apabila tersedia; gunakan sumber penerbitan dan "
     "akademik yang relevan sebagai sokongan apabila sumber rasmi tiada. "
     "Bagi berita dan maklumat terkini, semak tarikh penerbitan dan peristiwa. "
