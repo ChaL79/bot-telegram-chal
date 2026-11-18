@@ -52,7 +52,7 @@ def reviewed_candidates(question: str, uncovered: list[str]) -> list[dict]:
             "source_tier": "delegated_official",
             "source_scope": "IPCC_DDC_DATA_ONLY",
         })
-    if "IPCC" in uncovered and re.search(r"\\b(?:sea\\s+level|paras\\s+laut)\\b", q):
+    if "IPCC" in uncovered and re.search(r"\b(?:sea\s+level|paras\s+laut)\b", q):
         selected.append({
             "provider": "NASA Sea Level IPCC AR6 projection data (delegated; not IPCC report)",
             "title": "NASA: IPCC AR6 Sea Level Projection Tool",
@@ -72,7 +72,7 @@ def reviewed_candidates(question: str, uncovered: list[str]) -> list[dict]:
             selected.append({
                 "provider": ("ASEAN Secretariat official reference"
                              if tier == "official" else
-                             "Singapore Government ASEAN background reference"),
+                             "ASEAN founding background from government signatory"),
                 "title": title,
                 "url": url,
                 "snippet": "",
