@@ -118,7 +118,10 @@ def _scoped_query(question: str, missing: list[str]) -> str:
         organization_terms.update(search_query_terms(name))
     subject = [t for t in topic if t not in organization_terms and
                t not in _GENERIC_TERMS and len(t) >= 3]
-    return (missing[0] + " " + " ".join(subject[:5]))[:150]
+    # For a general question with no named institution, use a short topical
+    # search. This makes one bounded recovery attempt if all indexes were empty.
+    prefix = missing[0] if missing else ""
+    return (prefix + " " + " ".join(subject[:5])).strip()[:150]
 
 
 async def _read_recovery_ref(
@@ -205,13 +208,16 @@ async def recover_sources(
     missing = status["missing"]
     if not missing and status["verified_count"]:
         return initial
-    if not missing and not discovered:
-        return initial
-
     candidates = _discovered_candidates(question, discovered, initial, missing)
-    # One targeted search only when a named organization's official page was
-    # missing and no alternate first-party result is already discoverable.
-    if missing and not any(x.get("source_tier") == "official" for x in candidates):
+    # One targeted search when the named official organization remains
+    # uncovered, OR a general research question had zero viable candidates.
+    # No broad discovery loops, no paid APIs and no repeat of failed hosts.
+    needs_search = (
+        (bool(missing) and not any(
+            x.get("source_tier") == "official" for x in candidates))
+        or (not missing and not candidates)
+    )
+    if needs_search and _scoped_query(question, missing):
         try:
             extra = await asyncio.wait_for(
                 public_source_search(_scoped_query(question, missing),
