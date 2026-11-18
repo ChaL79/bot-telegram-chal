@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 # Explicit institutional/source names are only a conservative subset. Do not
 # infer that a question lacking one of these names has complete source coverage.
 SOURCE_REGISTRY = {
+    "ASEAN": (r"\bASEAN\b", ("asean.org",)),
     "NOAA": (r"\bNOAA\b", ("noaa.gov", "climate.gov")),
     "NASA": (r"\bNASA\b", ("nasa.gov",)),
     "IPCC": (r"\bIPCC\b", ("ipcc.ch",)),
