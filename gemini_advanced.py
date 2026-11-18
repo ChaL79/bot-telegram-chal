@@ -231,8 +231,12 @@ def research_fallback(sources: list[dict], reason: str) -> str:
     This is deterministic raw evidence, NOT an AI-generated research conclusion.
     Only fetched excerpts may be quoted as read; search metadata is not proof.
     """
+    rejected = reason == "rujukan atau angka dalam analisis belum disahkan"
     lines = [
-        "⚠️ Gemini tidak dapat menghasilkan analisis sekarang (" + reason + ").",
+        ("⚠️ Analisis Gemini ditolak oleh semakan bukti; "
+         "rujukan atau angka belum disahkan."
+         if rejected else
+         "⚠️ Gemini tidak dapat menghasilkan analisis sekarang (" + reason + ")."),
         "Carian sumber telah dibuat, tetapi jawapan berikut BUKAN analisis Gemini.",
         "Sumber yang diperoleh (petikan/metadata, bukan semakan artikel penuh):",
     ]
