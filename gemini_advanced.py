@@ -286,6 +286,7 @@ async def run_advanced(
             return (
                 quality_header(coverage) + "\n\n"
                 "Carian hanya menemui metadata atau percubaan bacaan yang gagal. "
+                "Saya tidak akan meneka jawapan atau mereka rujukan. "
                 "Tiada analisis Gemini dijana daripada sumber yang belum dibaca. "
                 + references_text(sources),
                 False,
