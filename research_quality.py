@@ -69,11 +69,11 @@ def assess_sources(question: str, sources: list[dict]) -> dict:
 # Only check figures with numerical units or currencies, avoiding all plain
 # years, reference numbers, numbered lists and arbitrary numbers in prose.
 _QUANTITY = re.compile(
-    r"(?<![\\w])(?:(?:US|BND)?\\$\\s*\\d+(?:[.,]\\d+)?(?:\\s*/\\s*(?:month|bulan|year|tahun))?"
-    r"|(?:USD|BND|RM)\\s*\\d+(?:[.,]\\d+)?(?:\\s*/\\s*(?:month|bulan|year|tahun))?"
-    r"|\\d+(?:[.,]\\d+)?(?:\\s*[–-]\\s*\\d+(?:[.,]\\d+)?)?"
-    r"\\s*(?:%|mm\\b|cm\\b|km\\b|met(?:er|re)s?\\b|GB\\b|TB\\b|Mbps\\b|"
-    r"billion\\b|million\\b|juta\\b|bilion\\b))",
+    r"(?<![\w])(?:(?:US|BND)?\$\s*\d+(?:[.,]\d+)?(?:\s*/\s*(?:month|bulan|year|tahun))?"
+    r"|(?:USD|BND|RM)\s*\d+(?:[.,]\d+)?(?:\s*/\s*(?:month|bulan|year|tahun))?"
+    r"|\d+(?:[.,]\d+)?(?:\s*[–-]\s*\d+(?:[.,]\d+)?)?"
+    r"\s*(?:%|mm\b|cm\b|km\b|met(?:er|re)s?\b|GB\b|TB\b|Mbps\b|"
+    r"billion\b|million\b|juta\b|bilion\b))",
     re.IGNORECASE,
 )
 _NUMBER = re.compile(r"\d+(?:[.,]\d+)?")
