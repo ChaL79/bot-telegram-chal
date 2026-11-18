@@ -3,6 +3,8 @@ on:
   pull_request:
     paths:
       - 'source_reader.py'
+      - 'source_recovery.py'
+      - 'test_source_recovery.py'
       - 'free_research.py'
       - 'public_article_reader.py'
       - 'test_public_article_reader.py'
@@ -27,4 +29,4 @@ jobs:
       - name: Run mocked research and security regressions
         env:
           ENABLE_GENERAL_PUBLIC_READER: '0'
-        run: python -m unittest -v test_public_article_reader test_source_reader test_free_research
+        run: python -m unittest -v test_public_article_reader test_source_reader test_source_recovery test_free_research
