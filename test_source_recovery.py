@@ -172,26 +172,44 @@ class SourceRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(search.await_count, 1)
 
     async def test_asean_catalog_official_excerpt_promoted_when_read(self):
+        from official_evidence_catalog import reviewed_candidates
+        from source_recovery import _read_recovery_ref
         question = "Jelaskan sejarah pembentukan ASEAN dan tujuan penubuhannya"
+        refs = reviewed_candidates(question, ["ASEAN"])
+        official = next(x for x in refs if x["source_tier"] == "official")
         seen = []
         async def fake_reader(url, client=None):
             seen.append(url)
-            if url.startswith("https://asean.org/"):
-                return ("<main><article><h1>The Founding of ASEAN</h1><p>"
-                        "ASEAN was founded in 1967 in Bangkok to establish "
-                        "regional economic cooperation, social progress and "
-                        "peace in Southeast Asia. The ASEAN founding nations "
-                        "agreed to cooperate through this regional organization."
-                        "</p></article></main>")
-            return ""
+            return ("<main><article><h1>The Founding of ASEAN</h1><p>"
+                    "ASEAN was founded in 1967 in Bangkok to establish "
+                    "regional economic cooperation, social progress and "
+                    "peace in Southeast Asia. The ASEAN founding nations "
+                    "agreed to cooperate through this regional organization."
+                    "</p></article></main>")
         with patch("source_recovery.read_public_html", side_effect=fake_reader):
-            with patch("source_recovery.public_source_search") as search:
-                result = await recover_sources(question, [], [])
-        self.assertEqual(search.await_count, 0)
-        self.assertTrue(any(x.get("read_status") == "verified_page_excerpt"
-                            and x.get("source_tier") == "official" for x in result))
-        self.assertEqual(assess_sources(question, result)["status"], "PASS")
-        self.assertLessEqual(len(seen), 2)
+            result = await _read_recovery_ref(question, official, None)
+        self.assertEqual(result["source_tier"], "official")
+        self.assertEqual(result["read_status"], "verified_page_excerpt")
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(assess_sources(question, [result])["status"], "PASS")
+
+    async def test_asean_founding_governments_are_read_as_independent_excerpts(self):
+        from official_evidence_catalog import reviewed_candidates
+        question = "Sejarah penubuhan ASEAN di Bangkok"
+        refs = reviewed_candidates(question, ["ASEAN"])
+        self.assertEqual([x["source_tier"] for x in refs[:2]],
+                         ["founding_government", "founding_government"])
+        async def fake_reader(url, client=None):
+            return ("<main><article><p>"
+                    "ASEAN was founded in 1967 in Bangkok to establish "
+                    "peaceful regional cooperation and economic growth "
+                    "among founding member governments."
+                    "</p></article></main>")
+        with patch("source_recovery.read_public_html", side_effect=fake_reader):
+            result = await recover_sources(question, [], [])
+        self.assertEqual(len([x for x in result
+                              if x["read_status"] == "verified_page_excerpt"]), 2)
+        self.assertEqual(assess_sources(question, result)["status"], "PARTIAL")
 
     async def test_ipcc_delegated_dataset_is_not_full_official_coverage(self):
         question = "Bandingkan NOAA dan IPCC sea level rise projections"
