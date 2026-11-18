@@ -5,6 +5,9 @@ on:
       - 'research_recovery_live_diagnostic.py'
       - 'source_recovery.py'
       - 'research_quality.py'
+      - 'official_evidence_catalog.py'
+      - 'research_release_gate.py'
+      - 'test_research_release_gate.py'
       - '.github/workflows/research-recovery-live.yml'
 permissions:
   contents: read
@@ -22,8 +25,10 @@ jobs:
       - name: Install pinned dependencies
         run: python -m pip install -r requirements.txt
       - name: Compile live diagnostic
-        run: python -m py_compile research_recovery_live_diagnostic.py
+        run: python -m py_compile research_recovery_live_diagnostic.py research_release_gate.py
       - name: Live read-only acceptance without model API or secrets
         env:
           ENABLE_GENERAL_PUBLIC_READER: '1'
         run: python -u research_recovery_live_diagnostic.py
+      - name: Enforce release acceptance (fails closed if live evidence missing)
+        run: python -u research_release_gate.py research_acceptance.json
