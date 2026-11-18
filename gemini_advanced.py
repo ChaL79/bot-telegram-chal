@@ -7,6 +7,7 @@ Commands:
               explicitly unverified rather than invented.
 No paid-tier activation, retries, or user-supplied arbitrary URL fetching.
 """
+import asyncio
 import datetime as dt
 import logging
 import re
@@ -32,6 +33,8 @@ MAX_INPUT_CHARS = 3200
 # High thinking may need substantially more inference time than minimal.
 # Keep exactly ONE Gemini request and preserve a finite timeout.
 GEMINI_READ_TIMEOUT = {"power": 70.0, "deepdive": 85.0}
+# Bound search + first reads + recovery to leave headroom under bot.py 110s.
+RESEARCH_FETCH_TIMEOUT = 20.0
 # Includes hidden thinking tokens; too-small caps can produce no visible answer.
 # Do not configure a paid model or automatically retry on quota/timeout.
 GEMINI_MAX_OUTPUT_TOKENS = {"power": 6144, "deepdive": 8192}
@@ -293,12 +296,23 @@ async def run_advanced(
     prompt = RESEARCH_PROMPT if research else POWER_PROMPT
     sources = []
     if research:
-        discovered = await public_source_search(question, client=search_client)
-        # Primary read remains unchanged; bounded recovery is only attempted
-        # for uncovered organizations or no verified excerpts.
-        sources = await enrich_with_read_excerpts(question, discovered, client=search_client)
-        sources = await recover_sources(
-            question, discovered, sources, client=search_client)
+        async def collect_sources() -> list[dict]:
+            discovered = await public_source_search(question, client=search_client)
+            initial = await enrich_with_read_excerpts(
+                question, discovered, client=search_client)
+            return await recover_sources(
+                question, discovered, initial, client=search_client)
+
+        try:
+            sources = await asyncio.wait_for(
+                collect_sources(), timeout=RESEARCH_FETCH_TIMEOUT)
+        except asyncio.TimeoutError:
+            return (
+                "Research Quality Gate: INSUFFICIENT_EVIDENCE — "
+                "carian dan bacaan sumber melebihi had masa selamat. "
+                "Tiada panggilan Gemini dibuat; cuba soalan lebih khusus.",
+                False,
+            )
         coverage = assess_sources(question, sources)
         if coverage["status"] == "INSUFFICIENT_EVIDENCE":
             return (
