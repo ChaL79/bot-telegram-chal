@@ -12,6 +12,33 @@ from free_research import (
 
 
 class FreeResearchTests(unittest.IsolatedAsyncioTestCase):
+    def test_delegated_science_data_scope_visible_in_model_and_telegram(self):
+        ref = {
+            "provider": "NASA", "title": "NASA IPCC AR6 projection tool",
+            "url": "https://sealevel.nasa.gov/data_tools/17/",
+            "read_status": "verified_page_excerpt",
+            "excerpt": "IPCC AR6 sea level projection scenarios are displayed in the NASA tool.",
+            "source_tier": "delegated_official",
+            "source_scope": "IPCC_AR6_NASA_DATA_ONLY",
+        }
+        self.assertIn("not the full original IPCC", evidence_text([ref]))
+        self.assertIn("bukan laporan IPCC asal", references_text([ref]))
+        self.assertIn("FETCHED PAGE EXCERPT", evidence_text([ref]))
+
+    def test_founding_government_is_not_mislabeled_asean_secretariat(self):
+        ref = {
+            "provider": "Thai Ministry of Foreign Affairs",
+            "title": "Birth of ASEAN",
+            "url": "https://asean.mfa.go.th/en/page/62206-the-birth-of-asean",
+            "read_status": "verified_page_excerpt",
+            "excerpt": "ASEAN was founded in Bangkok in 1967.",
+            "source_tier": "founding_government",
+            "source_scope": "ASEAN_BACKGROUND",
+        }
+        self.assertIn("not the ASEAN Secretariat", evidence_text([ref]))
+        self.assertIn("bukan laman Sekretariat ASEAN", references_text([ref]))
+        self.assertIn("FETCHED PAGE EXCERPT", evidence_text([ref]))
+
     def test_allow_public_https_only(self):
         self.assertTrue(allowed_source_url("https://example.org/article"))
         for url in ("http://example.org/", "https://localhost/x", "https://127.0.0.1/",
