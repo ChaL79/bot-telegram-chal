@@ -17,6 +17,7 @@ from typing import Optional
 import httpx
 from free_research import public_source_search, evidence_text, references_text
 from source_reader import enrich_with_read_excerpts
+from research_quality import assess_sources, assess_answer, quality_header
 
 log = logging.getLogger("gemini_advanced")
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
@@ -280,12 +281,13 @@ async def run_advanced(
         sources = await public_source_search(question, client=search_client)
         # Research can proceed with official documentation even if search feeds are blocked.
         sources = await enrich_with_read_excerpts(question, sources, client=search_client)
-        if not sources:
+        coverage = assess_sources(question, sources)
+        if coverage["status"] == "INSUFFICIENT_EVIDENCE":
             return (
-                "Carian sumber awam tidak menemui bukti yang relevan dan boleh "
-                "disahkan. Saya tidak akan meneka jawapan atau mereka rujukan. "
-                "Cuba sebut lokasi, tempoh, atau nama topik dengan lebih khusus. "
-                "Untuk penjelasan umum tanpa web, gunakan /gemini.",
+                quality_header(coverage) + "\n\n"
+                "Carian hanya menemui metadata atau percubaan bacaan yang gagal. "
+                "Tiada analisis Gemini dijana daripada sumber yang belum dibaca. "
+                + references_text(sources),
                 False,
             )
     current_date = dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).strftime("%d %B %Y")
@@ -375,7 +377,9 @@ async def run_advanced(
         reference_text = references_text(sources)
         quote_text = verified_source_quotes(sources)
         narrative = suppress_model_quotes(answer)
+        quality = assess_answer(question, narrative, sources)
         return (
+            quality_header(quality) + "\n\n"
             "Penyelidikan berdasarkan petikan halaman terpilih dan metadata carian. "
             "Tidak semestinya membaca artikel penuh:\n\n"
             + narrative[:max(1500, 10000 - len(reference_text) - len(quote_text))]
