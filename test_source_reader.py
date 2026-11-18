@@ -677,8 +677,8 @@ No content on data practices.
                          b"</article></main></html>")
         async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as client:
             sources = await enrich_with_read_excerpts(question, [], client=client)
-        self.assertEqual(len(visited), 2)
-        self.assertEqual(len(sources), 2)
+        self.assertEqual(len(visited), 3)
+        self.assertEqual(len(sources), 3)
         self.assertTrue(all(x["read_status"] == "verified_page_excerpt" for x in sources))
         self.assertTrue(all("thermal expansion" in x["excerpt"].lower() for x in sources))
 
