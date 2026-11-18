@@ -58,7 +58,34 @@ SCIENCE_SEA_LEVEL_DOCS = (
     ("https://sealevel.nasa.gov/faq/12/what-causes-sea-level-rise/",
      "NASA Sea Level Change: What causes sea level rise?",
      "sea level rise thermal expansion melting land ice"),
+    ("https://www.ipcc.ch/report/ar6/wg1/resources/spm-headline-statements/",
+     "IPCC AR6 WGI: Summary for Policymakers Headline Statements",
+     "climate change global sea level rise warming projections"),
 )
+
+
+# Reviewed public vendor references, not verified until fetched and checked.
+# Trigger only for explicit questions about Ollama cloud/local hardware or cost.
+OLLAMA_CLOUD_DOCS = (
+    ("https://docs.ollama.com/cloud",
+     "Ollama documentation: Local and cloud model execution"),
+    ("https://ollama.com/pricing",
+     "Ollama official pricing: free allowance and cloud token costs"),
+)
+
+
+def requested_ollama_official_refs(question: str) -> list[dict]:
+    terms = set(search_query_terms(question))
+    if "ollama" not in terms:
+        return []
+    q = question.casefold()
+    if not ({"cloud", "local", "hardware", "price", "cost", "privacy"} & terms
+            or re.search(r"\b(?:awan|tempatan|kos|harga|prestasi)\b", q)):
+        return []
+    return [{"provider": "Reviewed Ollama official documentation (not yet read)",
+             "title": title, "url": url, "snippet": "", "published": ""}
+            for url, title in OLLAMA_CLOUD_DOCS
+            if safe_public_article_url(url)]
 
 
 def official_science_seeds(question: str) -> list[dict]:
@@ -74,7 +101,8 @@ def official_science_seeds(question: str) -> list[dict]:
     refs = []
     for url, title, focus in SCIENCE_SEA_LEVEL_DOCS:
         if ("noaa" in requested and "climate.gov" in url
-                or "nasa" in requested and "nasa.gov" in url):
+                or "nasa" in requested and "nasa.gov" in url
+                or "ipcc" in requested and "ipcc.ch" in url):
             refs.append({"provider": "Official science agency primary source",
                          "title": title, "url": url, "snippet": "",
                          "published": "", "focus": focus})
@@ -835,6 +863,7 @@ async def enrich_with_read_excerpts(
     if os.environ.get("ENABLE_GENERAL_PUBLIC_READER", "1") == "1" and not official_google and not identity_docs:
         fallback_refs = (accessibility_official_fallbacks(question, sources)
                          + requested_fatigue_official_refs(question, sources)
+                         + requested_ollama_official_refs(question)
                          + wifi7_comparison_recovery(question, sources))
         wanted_hosts = requested_wcag_hosts(question)
         # Prefer independent hostnames: three W3C navigation pages should not
@@ -853,6 +882,9 @@ async def enrich_with_read_excerpts(
         first_maker = [ref for ref in sources if any(
             urlsplit(ref.get("url", "")).hostname in PRODUCT_OFFICIAL_DOMAINS[org]
             for org in named_makers)][:1]
+        # Named-source coverage first, then ranking of arbitrary search hits.
+        # These references still require live, bounded HTML reading; never
+        # pretend a URL discovered in code has already been verified.
         for ref in targeted + fallback_refs + first_maker + secondary + sources:
             url = ref.get("url", "")
             host = urlsplit(url).hostname
@@ -927,7 +959,9 @@ async def enrich_with_read_excerpts(
     # Provenance: attempted but no valid excerpt is NOT "metadata only".
     # Keep strict curated-only routines' existing failure behavior unchanged;
     # classify all selected general reader and WCAG fallback attempts.
-    attempted_urls = general_candidate_urls | {ref["url"] for ref in fallback_refs}
+    attempted_urls = (general_candidate_urls
+                      | {ref["url"] for ref in fallback_refs}
+                      | {ref["url"] for ref in science_seeds})
     failed = [{**ref, "read_status": "page_unavailable"}
               for ref in approved_candidates
               if ref["url"] in attempted_urls and ref["url"] not in read_urls]
