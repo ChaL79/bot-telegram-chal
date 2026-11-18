@@ -130,8 +130,11 @@ class SourceRecoveryTests(unittest.IsolatedAsyncioTestCase):
             count.append(str(req.url))
             return httpx.Response(403)
         async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as client:
-            with patch("source_recovery.public_source_search", return_value=[]):
-                result = await recover_sources(question, discovered, initial, client=client)
+            # Verify the generic two-page cap independently of reviewed
+            # institution-specific catalog fallbacks.
+            with patch("source_recovery.reviewed_candidates", return_value=[]):
+                with patch("source_recovery.public_source_search", return_value=[]):
+                    result = await recover_sources(question, discovered, initial, client=client)
         self.assertEqual(len(count), 2)
         self.assertTrue(all(url.startswith("https://example") for url in count))
         self.assertFalse(any(s.get("read_status") == "verified_page_excerpt" for s in result))
