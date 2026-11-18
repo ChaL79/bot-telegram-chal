@@ -151,6 +151,20 @@ async def _read_recovery_ref(
                                                "IPCC_AR6_NASA_DATA_ONLY") else
                  question)
         excerpt = select_relevant_excerpt(body, focus)
+        if ref.get("source_scope") == "ASEAN_BACKGROUND":
+            # Institutional pages may mention ASEAN in multiple unrelated
+            # sections. Bind the founding-year claim to ACTUAL page lines,
+            # not to a generic top-ranked excerpt from navigation material.
+            lines = [line.strip() for line in body.splitlines()
+                     if len(line.strip()) >= 25]
+            anchors = [line for line in lines
+                       if "asean" in line.casefold() and (
+                           "1967" in line or
+                           "founded" in line.casefold() or
+                           "established" in line.casefold() or
+                           "founding" in line.casefold())]
+            if anchors:
+                excerpt = "\n".join(anchors[:5])[:2400]
         if not excerpt or len(excerpt) < 65:
             return failed
         if ref.get("source_scope") == "ASEAN_BACKGROUND":
