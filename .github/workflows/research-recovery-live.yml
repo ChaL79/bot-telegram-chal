@@ -1,0 +1,29 @@
+name: Research recovery live diagnostic
+on:
+  pull_request:
+    paths:
+      - 'research_recovery_live_diagnostic.py'
+      - 'source_recovery.py'
+      - 'research_quality.py'
+      - '.github/workflows/research-recovery-live.yml'
+permissions:
+  contents: read
+jobs:
+  public-diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Compile live diagnostic
+        run: python -m py_compile research_recovery_live_diagnostic.py
+      - name: Live read-only acceptance without model API or secrets
+        env:
+          ENABLE_GENERAL_PUBLIC_READER: '1'
+        run: python -u research_recovery_live_diagnostic.py
