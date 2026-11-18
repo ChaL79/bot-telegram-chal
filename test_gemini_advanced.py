@@ -142,6 +142,29 @@ class AdvancedTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(GEMINI_READ_TIMEOUT["deepdive"], 85.0)
         self.assertEqual(GEMINI_READ_TIMEOUT["power"], 70.0)
 
+    async def test_slow_source_collection_times_out_before_gemini(self):
+        import asyncio
+        from unittest.mock import patch
+        def api_mock(req):
+            self.fail("Gemini API must never be called after source timeout")
+        async def stalled_search(*args, **kwargs):
+            await asyncio.sleep(0.1)
+            return []
+        with patch("gemini_advanced.RESEARCH_FETCH_TIMEOUT", 0.001):
+            with patch("gemini_advanced.public_source_search",
+                       side_effect=stalled_search):
+                async with httpx.AsyncClient(
+                    transport=httpx.MockTransport(api_mock)) as client:
+                    answer, ok = await run_advanced(
+                        "ASEAN history", "TEST_KEY", "deepdive", client=client)
+        self.assertFalse(ok)
+        self.assertIn("Tiada panggilan Gemini dibuat", answer)
+
+    def test_research_timeout_budget_less_than_telegram_handler_limit(self):
+        from gemini_advanced import (RESEARCH_FETCH_TIMEOUT, GEMINI_READ_TIMEOUT)
+        self.assertLess(RESEARCH_FETCH_TIMEOUT + GEMINI_READ_TIMEOUT["deepdive"],
+                        110)
+
     async def test_power_single_network_failure_no_retry(self):
         calls = []
         def api_mock(req):
