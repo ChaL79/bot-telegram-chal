@@ -91,8 +91,11 @@ class SourceRecoveryTests(unittest.IsolatedAsyncioTestCase):
                              "scenarios and scientific uncertainties. Additional sea level "
                              "projection research considers polar ice changes."))
         async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as client:
-            with patch("source_recovery.public_source_search", return_value=[]):
-                result = await recover_sources(question, discovered, initial, client=client)
+            # Isolate the classification of a third-party search result from
+            # first-party/delegated catalog sources for this unit test.
+            with patch("source_recovery.reviewed_candidates", return_value=[]):
+                with patch("source_recovery.public_source_search", return_value=[]):
+                    result = await recover_sources(question, discovered, initial, client=client)
         self.assertEqual(assess_sources(question, result)["status"], "PARTIAL")
         self.assertTrue(any(s.get("source_tier") == "secondary" and
                             s.get("read_status") == "verified_page_excerpt"
