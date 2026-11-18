@@ -174,6 +174,12 @@ MALAY_RESEARCH_TERMS = {
     "tenaga": "energy", "elektrik": "electricity", "kos": "cost",
     "telefon": "phone", "pembelajaran": "learning",
     "alam": "nature", "semula": "natural",
+    "kenaikan": "rise", "paras": "level", "pencairan": "melting",
+    "glasier": "glaciers", "unjuran": "projection",
+    "ketidakpastian": "uncertainty", "pemanasan": "warming",
+    "lautan": "ocean", "kajian": "research",
+    "perkakasan": "hardware", "privasi": "privacy",
+    "ketepatan": "accuracy", "perbandingan": "comparison",
 }
 
 def _terms(value: str) -> list[str]:
@@ -182,6 +188,10 @@ def _terms(value: str) -> list[str]:
     # normalization is applied to titles/snippets when scoring RSS hits.
     value = value.casefold()
     value = re.sub(r"\balam\s+sekitar\b", "persekitaran", value)
+    # Malay climate terminology maps to established English scientific anchors.
+    # Use before tokenization; a direct NOAA/NASA/IPCC comparison must not
+    # collapse into unrelated agency landing pages.
+    value = re.sub(r"\bparas\s+laut\b", "sea level", value)
     value = re.sub(r"\bwi[\s-]*fi\b", "wifi", value)
     value = re.sub(r"\btp[\s-]*link\b", "tplink", value)
     value = re.sub(r"\bmulti[\s-]*link\b", "multilink", value)
@@ -200,7 +210,7 @@ TOPIC_ANCHORS = frozenset({
     "passkeys", "passkey", "fido2", "totp", "mfa", "otp", "phishing",
     "authenticator", "authentication", "webauthn", "cybersecurity",
     "nist", "cisa", "fido", "sms", "sim", "swapping",
-    "noaa", "nasa", "ipcc", "sea", "level", "rise",
+    "noaa", "nasa", "ipcc", "sea", "level", "rise", "projection", "uncertainty",
     "thermal", "expansion", "ocean", "glaciers", "glacier",
     "ice", "sheets", "melting", "climate",
     "wcag", "accessibility", "keyboard", "focus", "visibility",
