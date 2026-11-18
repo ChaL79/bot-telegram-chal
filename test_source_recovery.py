@@ -72,8 +72,9 @@ class SourceRecoveryTests(unittest.IsolatedAsyncioTestCase):
         def no_http(req):
             self.fail("Denied host should not be retried")
         async with httpx.AsyncClient(transport=httpx.MockTransport(no_http)) as client:
-            with patch("source_recovery.public_source_search", return_value=[]) as search:
-                result = await recover_sources(question, discovered, initial, client=client)
+            with patch("source_recovery.reviewed_candidates", return_value=[]):
+                with patch("source_recovery.public_source_search", return_value=[]) as search:
+                    result = await recover_sources(question, discovered, initial, client=client)
         self.assertEqual(len(result), len(initial))
         self.assertEqual(search.await_count, 1)
 
@@ -136,9 +137,9 @@ class SourceRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(any(s.get("read_status") == "verified_page_excerpt" for s in result))
 
     async def test_general_history_zero_results_gets_one_bounded_search(self):
-        question = "Jelaskan sejarah pembentukan ASEAN dan tujuan penubuhannya."
-        source = ref("https://history.example.org/history/asean-foundation",
-                     "History of ASEAN founding and regional cooperation",
+        question = "Jelaskan sejarah pembentukan empayar Majapahit dan tujuan penubuhannya."
+        source = ref("https://history.example.org/history/majapahit-foundation",
+                     "History of Majapahit founding and regional cooperation",
                      "search_metadata_only")
         seen = []
         async def search(query, **kwargs):
@@ -146,9 +147,9 @@ class SourceRecoveryTests(unittest.IsolatedAsyncioTestCase):
             return [source]
         def mock(request):
             return httpx.Response(200, headers={"content-type": "text/html"},
-                content=page("ASEAN history documents the foundation of regional "
-                             "cooperation in Southeast Asia, and ASEAN founding "
-                             "agreements explain diplomatic and economic collaboration."))
+                content=page("Majapahit history documents the foundation of a regional "
+                             "empire in Southeast Asia, and Majapahit founding "
+                             "chronicles explain early dynastic political collaboration."))
         async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as client:
             with patch("source_recovery.public_source_search", side_effect=search):
                 result = await recover_sources(question, [], [], client=client)
@@ -160,9 +161,61 @@ class SourceRecoveryTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_general_history_no_results_fails_closed(self):
         with patch("source_recovery.public_source_search", return_value=[]) as search:
-            result = await recover_sources("History of ASEAN founding", [], [])
+            result = await recover_sources("History of the Majapahit kingdom founding", [], [])
         self.assertEqual(result, [])
         self.assertEqual(search.await_count, 1)
+
+    async def test_asean_catalog_official_excerpt_promoted_when_read(self):
+        question = "Jelaskan sejarah pembentukan ASEAN dan tujuan penubuhannya"
+        seen = []
+        async def fake_reader(url, client=None):
+            seen.append(url)
+            if url.startswith("https://asean.org/"):
+                return ("<main><article><h1>The Founding of ASEAN</h1><p>"
+                        "ASEAN was founded in 1967 in Bangkok to establish "
+                        "regional economic cooperation, social progress and "
+                        "peace in Southeast Asia. The ASEAN founding nations "
+                        "agreed to cooperate through this regional organization."
+                        "</p></article></main>")
+            return ""
+        with patch("source_recovery.read_public_html", side_effect=fake_reader):
+            with patch("source_recovery.public_source_search") as search:
+                result = await recover_sources(question, [], [])
+        self.assertEqual(search.await_count, 0)
+        self.assertTrue(any(x.get("read_status") == "verified_page_excerpt"
+                            and x.get("source_tier") == "official" for x in result))
+        self.assertEqual(assess_sources(question, result)["status"], "PASS")
+        self.assertLessEqual(len(seen), 2)
+
+    async def test_ipcc_delegated_dataset_is_not_full_official_coverage(self):
+        question = "Bandingkan NOAA dan IPCC sea level rise projections"
+        initial = [ref("https://www.climate.gov/news/sea-level", "NOAA",
+                       "verified_page_excerpt",
+                       "NOAA sea level rise projected from warming.")]
+        urls = []
+        async def fake_reader(url, client=None):
+            urls.append(url)
+            if url.startswith("https://ipcc-data.climate.columbia.edu/"):
+                return ("<main><article><h1>IPCC AR6 sea level rise</h1><p>"
+                        "IPCC AR6 sea level rise projected coastal changes "
+                        "under scenarios described in the IPCC synthesis report. "
+                        "This catalog record provides sea level rise data."
+                        "</p></article></main>")
+            return ""
+        with patch("source_recovery.read_public_html", side_effect=fake_reader):
+            with patch("source_recovery.public_source_search", return_value=[]):
+                result = await recover_sources(question, [], initial)
+        self.assertEqual(assess_sources(question, result)["status"], "PARTIAL")
+        self.assertTrue(any(x.get("source_tier") == "delegated_official"
+                            and x.get("read_status") == "verified_page_excerpt"
+                            for x in result))
+        self.assertTrue(any("columbia.edu" in url for url in urls))
+
+    def test_catalog_never_uses_untrusted_prompt_urls(self):
+        from official_evidence_catalog import reviewed_candidates
+        refs = reviewed_candidates("sejarah ASEAN https://evil.example/admin", ["ASEAN"])
+        self.assertTrue(refs)
+        self.assertTrue(all("evil.example" not in x["url"] for x in refs))
 
     async def test_disable_flag_prevents_all_recovery(self):
         initial = [ref("https://www.ipcc.ch/report", "IPCC", "page_unavailable")]
