@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 from urllib.parse import urlsplit
 
 from free_research import public_source_search
@@ -75,6 +76,8 @@ async def main() -> None:
               for name in ("PASS", "PARTIAL", "INSUFFICIENT_EVIDENCE",
                            "INCONCLUSIVE_TIMEOUT")}
     print("LIVE_SUMMARY " + json.dumps(counts), flush=True)
+    Path("research_acceptance.json").write_text(
+        json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 if __name__ == "__main__":
