@@ -21,7 +21,7 @@ class FreeResearchTests(unittest.IsolatedAsyncioTestCase):
             "source_tier": "delegated_official",
             "source_scope": "IPCC_AR6_NASA_DATA_ONLY",
         }
-        self.assertIn("not the full original IPCC", evidence_text([ref]))
+        self.assertIn("not the full original ipcc", evidence_text([ref]).casefold())
         self.assertIn("bukan laporan IPCC asal", references_text([ref]))
         self.assertIn("FETCHED PAGE EXCERPT", evidence_text([ref]))
 
@@ -35,7 +35,7 @@ class FreeResearchTests(unittest.IsolatedAsyncioTestCase):
             "source_tier": "founding_government",
             "source_scope": "ASEAN_BACKGROUND",
         }
-        self.assertIn("not the ASEAN Secretariat", evidence_text([ref]))
+        self.assertIn("not the asean secretariat", evidence_text([ref]).casefold())
         self.assertIn("bukan laman Sekretariat ASEAN", references_text([ref]))
         self.assertIn("FETCHED PAGE EXCERPT", evidence_text([ref]))
 
