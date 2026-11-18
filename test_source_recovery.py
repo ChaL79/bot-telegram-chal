@@ -24,24 +24,24 @@ def page(text):
 
 
 class SourceRecoveryTests(unittest.IsolatedAsyncioTestCase):
-    async def test_missing_ipcc_recovers_separate_official_html(self):
+    async def test_missing_nasa_recovers_distinct_official_hostname(self):
         question = "Bandingkan NOAA NASA IPCC sea level rise projection uncertainty"
         existing = [
             ref("https://www.climate.gov/news/sea-level", "NOAA", "verified_page_excerpt",
                 "Sea level rise from land ice and thermal expansion."),
-            ref("https://sealevel.nasa.gov/faq/12", "NASA", "verified_page_excerpt",
-                "Sea level rise occurs through ocean warming and ice melt."),
-            ref("https://www.ipcc.ch/report/ar6", "IPCC", "page_unavailable"),
+            ref("https://science.nasa.gov/climate/sea-level", "NASA", "page_unavailable"),
+            ref("https://www.ipcc.ch/report/ar6", "IPCC", "verified_page_excerpt",
+                "IPCC sea level rise projection uncertainty scenarios and impacts."),
         ]
         discovery = [ref(
-            "https://www.ipcc.ch/report/ar6/wg1/chapter/chapter-9/",
-            "IPCC sea level rise projection uncertainty", "search_metadata_only")]
+            "https://sealevel.nasa.gov/faq/12/what-causes-sea-level-rise/",
+            "NASA sea level rise projection uncertainty", "search_metadata_only")]
         requests = []
         def mock(request):
             requests.append(str(request.url))
             return httpx.Response(200, headers={"content-type": "text/html"},
                 content=page(
-                    "IPCC sea level rise projection uncertainty reflects ice sheet "
+                    "NASA sea level rise projection uncertainty reflects ice sheet "
                     "changes and future global temperature scenarios, with a "
                     "likely range of coastal sea level changes."
                 ))
