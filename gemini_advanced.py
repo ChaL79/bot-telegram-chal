@@ -242,8 +242,12 @@ def research_fallback(sources: list[dict], reason: str) -> str:
         if source.get("read_status") == "verified_page_excerpt" and source.get("excerpt"):
             label = "Petikan halaman diambil"
             lines.append(f"[{i}] {title} [{label}]\n{url}")
+        elif source.get("read_status") == "page_unavailable":
+            lines.append(f"[{i}] {title} [Halaman gagal dibaca; bukan bukti]\n{url}")
+        elif source.get("read_status") == "source_not_found":
+            lines.append(f"[{i}] {title} [Sumber rasmi tidak ditemui; URL belum disahkan]\n{url}")
         else:
-            lines.append(f"[{i}] {title} [Metadata carian sahaja]\n{url}")
+            lines.append(f"[{i}] {title} [Metadata carian sahaja; halaman belum dibaca]\n{url}")
     quotes = verified_source_quotes(sources[:5])
     if quotes:
         lines.append(quotes)
@@ -383,6 +387,17 @@ async def run_advanced(
         quote_text = verified_source_quotes(sources)
         narrative = suppress_model_quotes(answer)
         quality = assess_answer(question, narrative, sources)
+        if quality["unsupported_citations"] or quality["unmatched_quantities"]:
+            # Model output can cite an unread page or invent numerical facts.
+            # A warning alone still republishes those claims to Telegram.
+            # Fail closed: return only deterministic source-status + copied
+            # excerpts, never this untrusted model narrative. No extra API call.
+            return (
+                quality_header(quality) + "\n\n"
+                + research_fallback(
+                    sources, "rujukan atau angka dalam analisis belum disahkan"),
+                False,
+            )
         return (
             quality_header(quality) + "\n\n"
             "Penyelidikan berdasarkan petikan halaman terpilih dan metadata carian. "
