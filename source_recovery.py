@@ -147,7 +147,8 @@ async def _read_recovery_ref(
         focus = ("ASEAN founding regional cooperation 1967 history"
                  if ref.get("source_scope") == "ASEAN_BACKGROUND" else
                  "IPCC AR6 sea level rise projections"
-                 if ref.get("source_scope") == "IPCC_DDC_DATA_ONLY" else
+                 if ref.get("source_scope") in ("IPCC_DDC_DATA_ONLY",
+                                               "IPCC_AR6_NASA_DATA_ONLY") else
                  question)
         excerpt = select_relevant_excerpt(body, focus)
         if not excerpt or len(excerpt) < 65:
@@ -157,7 +158,8 @@ async def _read_recovery_ref(
             if "asean" not in terms or not (terms & {
                     "founding", "founded", "established", "bangkok", "1967"}):
                 return failed
-        elif ref.get("source_scope") == "IPCC_DDC_DATA_ONLY":
+        elif ref.get("source_scope") in ("IPCC_DDC_DATA_ONLY",
+                                               "IPCC_AR6_NASA_DATA_ONLY"):
             terms = set(re.findall(r"[a-z0-9]+", excerpt.casefold()))
             if not ({"ipcc", "sea", "level"} <= terms):
                 return failed
@@ -173,7 +175,7 @@ async def _read_recovery_ref(
                                  re.IGNORECASE)
                        for name in ref.get("recovery_for", [])):
                 return failed
-        label = ("Targeted recovery: verified IPCC DDC dataset description (not AR6 report)"
+        label = ("Targeted recovery: IPCC AR6 data via recognized scientific portal (not primary report)"
                  if ref.get("source_tier") == "delegated_official" else
                  "Targeted recovery: verified first-party article"
                  if ref.get("source_tier") == "official" else
