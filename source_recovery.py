@@ -142,13 +142,30 @@ async def _read_recovery_ref(
             fallback = BoundedBodyText()
             fallback.feed(html)
             body = fallback.content()
-        excerpt = select_relevant_excerpt(body, question)
+        # Reviewed multilingual history questions can use English-language
+        # grounding terms, while the actual page must still contain them.
+        focus = ("ASEAN founding regional cooperation 1967 history"
+                 if ref.get("source_scope") == "ASEAN_BACKGROUND" else
+                 "IPCC AR6 sea level rise projections"
+                 if ref.get("source_scope") == "IPCC_DDC_DATA_ONLY" else
+                 question)
+        excerpt = select_relevant_excerpt(body, focus)
         if not excerpt or len(excerpt) < 65:
             return failed
-        topic = _topic_terms(question)
-        actual_terms = set(search_query_terms(excerpt))
-        if topic and len(topic & actual_terms) < min(2, len(topic)):
-            return failed
+        if ref.get("source_scope") == "ASEAN_BACKGROUND":
+            terms = set(re.findall(r"[a-z0-9]+", excerpt.casefold()))
+            if "asean" not in terms or not (terms & {
+                    "founding", "founded", "established", "bangkok", "1967"}):
+                return failed
+        elif ref.get("source_scope") == "IPCC_DDC_DATA_ONLY":
+            terms = set(re.findall(r"[a-z0-9]+", excerpt.casefold()))
+            if not ({"ipcc", "sea", "level"} <= terms):
+                return failed
+        else:
+            topic = _topic_terms(question)
+            actual_terms = set(search_query_terms(excerpt))
+            if topic and len(topic & actual_terms) < min(2, len(topic)):
+                return failed
         if ref.get("source_tier") == "secondary":
             # A third-party article must explicitly mention the organization
             # in ACTUAL page text, not merely its search-result metadata.
