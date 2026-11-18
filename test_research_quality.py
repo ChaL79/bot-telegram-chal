@@ -67,10 +67,23 @@ class ResearchQualityTests(unittest.TestCase):
         requested = requested_organizations("NOAA versus NASA and IPCC")
         self.assertEqual(set(requested), {"NOAA", "NASA", "IPCC"})
 
-    def test_uncited_plain_year_does_not_trigger_numerical_alarm(self):
+    def test_unsupported_historical_year_is_flagged(self):
         s = [verified("NASA", "https://nasa.gov/sea", "Sea-level rise observed.")]
         result = assess_answer("NASA sea levels", "The report was written in 2025 [1].", s)
-        self.assertEqual(result["unmatched_quantities"], [])
+        self.assertIn("2025", result["unmatched_quantities"])
+        self.assertEqual(result["status"], "PARTIAL")
+
+    def test_historical_year_in_read_excerpt_passes(self):
+        s = [verified("ASEAN", "https://asean.org/about",
+                      "ASEAN was founded in Bangkok in 1967.")]
+        result = assess_answer("Sejarah ASEAN", "ASEAN ditubuhkan pada 1967 [1].", s)
+        self.assertEqual(result["status"], "PASS")
+
+    def test_huge_citation_number_is_not_ignored(self):
+        s = [verified("NASA", "https://nasa.gov/sea", "Sea-level rise observed.")]
+        result = assess_answer("NASA sea levels", "NASA membincangkan paras laut [100].", s)
+        self.assertEqual(result["unsupported_citations"], [100])
+        self.assertEqual(result["status"], "PARTIAL")
 
 
 if __name__ == "__main__":
