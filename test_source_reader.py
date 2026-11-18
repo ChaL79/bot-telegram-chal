@@ -682,13 +682,66 @@ No content on data practices.
         self.assertTrue(all(x["read_status"] == "verified_page_excerpt" for x in sources))
         self.assertTrue(all("thermal expansion" in x["excerpt"].lower() for x in sources))
 
+    async def test_malay_noaa_nasa_ipcc_question_gets_three_primary_agencies(self):
+        from unittest.mock import patch
+        from source_reader import official_science_seeds
+        question = ("Bandingkan bukti NOAA, NASA dan IPCC mengenai kenaikan "
+                    "paras laut, punca utama, unjuran dan tahap ketidakpastian.")
+        refs = official_science_seeds(question)
+        self.assertEqual(len(refs), 3)
+        self.assertEqual(
+            {r["url"].split("/")[2] for r in refs},
+            {"www.climate.gov", "sealevel.nasa.gov", "www.ipcc.ch"},
+        )
+        called = []
+        async def public_page(*a, **kw):
+            raise AssertionError("Curated science should use safe official reader")
+        async def permitted_reader(url, focus, *, client=None):
+            called.append(url)
+            if "ipcc.ch" in url:
+                return "Global sea level rise continues; climate warming increases ocean sea level through time."
+            return "Global sea level rise results from warming ocean thermal expansion and melting land ice glaciers."
+        with patch("source_reader.fetch_page_excerpt", side_effect=permitted_reader):
+            with patch("source_reader.read_public_html", side_effect=public_page):
+                result = await enrich_with_read_excerpts(question, [])
+        self.assertEqual(len(called), 3)
+        self.assertEqual(len(result), 3)
+        self.assertTrue(all(r["read_status"] == "verified_page_excerpt" for r in result))
+
+    async def test_ollama_local_cloud_comparison_uses_pricing_reference(self):
+        from unittest.mock import patch
+        from source_reader import requested_ollama_official_refs
+        question = ("Bandingkan Ollama local AI dan cloud AI dari segi "
+                    "prestasi, hardware, privasi, kos dan ketepatan.")
+        refs = requested_ollama_official_refs(question)
+        self.assertEqual(len(refs), 2)
+        self.assertIn("https://ollama.com/pricing", [r["url"] for r in refs])
+        visited = []
+        async def page(url, *, client=None):
+            visited.append(url)
+            if "pricing" in url:
+                return ("<html><main><p>Ollama pricing cloud models use "
+                        "transparent token costs with a free tier and "
+                        "paid usage credits on demand.</p></main></html>")
+            return ("<html><main><p>Ollama cloud inference runs on "
+                    "remote servers without a powerful local GPU, "
+                    "while local models run on device.</p></main></html>")
+        with patch.dict("os.environ", {"ENABLE_GENERAL_PUBLIC_READER": "1"}):
+            with patch("source_reader.read_public_html", side_effect=page):
+                result = await enrich_with_read_excerpts(question, [])
+        self.assertEqual(len(visited), 2)
+        self.assertEqual(len(result), 2)
+        self.assertTrue(all(r.get("read_status") == "verified_page_excerpt" for r in result))
+        self.assertTrue(any("token costs" in r["excerpt"] for r in result))
+
     async def test_sea_level_seed_blocked_stays_unverified(self):
         question = "Compare NOAA NASA IPCC sea level rise thermal expansion"
         async with httpx.AsyncClient(transport=httpx.MockTransport(
             lambda req: httpx.Response(403)
         )) as client:
             sources = await enrich_with_read_excerpts(question, [], client=client)
-        self.assertEqual(sources, [])
+        self.assertEqual(len(sources), 3)
+        self.assertTrue(all(r["read_status"] == "page_unavailable" for r in sources))
 
     def test_science_official_domain_article_allowlist(self):
         good = [
